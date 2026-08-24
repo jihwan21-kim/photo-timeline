@@ -20,6 +20,8 @@ import kotlin.math.sqrt
 
 class RouteViewModel(app: Application) : AndroidViewModel(app) {
 
+    private data class PacingPhase(val from: Long, val to: Long, val weight: Double)
+
     private val scanner = PhotoScanner(app)
     private var basemapJob: Job? = null
 
@@ -54,6 +56,8 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     var evenPacing by mutableStateOf(false); private set
 
     private var allPhotos: List<Photo> = emptyList()
+    private var pacingPhases: List<PacingPhase> = emptyList()
+    private var pacingWeight = 0.0
 
     val cursor: Long get() = cursorAt(progressT)
 
@@ -65,21 +69,9 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     private fun cursorAt(t: Float): Long {
         val p = plan ?: return 0L
         if (!evenPacing) {
-            data class Phase(val from: Long, val to: Long, val weight: Double)
-            val phases = ArrayList<Phase>()
-            p.segments.forEachIndexed { i, seg ->
-                val travelHours = (seg.arriveAt - seg.departAt).coerceAtLeast(1L) / 3_600_000.0
-                phases += Phase(seg.departAt, seg.arriveAt, sqrt(travelHours.coerceAtLeast(0.25)))
-                val next = p.segments.getOrNull(i + 1)?.departAt ?: p.endAt
-                if (next > seg.arriveAt) {
-                    val stayHours = (next - seg.arriveAt) / 3_600_000.0
-                    phases += Phase(seg.arriveAt, next, sqrt(stayHours.coerceAtLeast(0.25)) * 1.35)
-                }
-            }
-            if (phases.isEmpty()) return p.startAt
-            val total = phases.sumOf { it.weight }
-            var target = t.coerceIn(0f, 1f) * total
-            for (phase in phases) {
+            if (pacingPhases.isEmpty()) return p.startAt
+            var target = t.coerceIn(0f, 1f) * pacingWeight
+            for (phase in pacingPhases) {
                 if (target <= phase.weight) {
                     val f = (target / phase.weight).coerceIn(0.0, 1.0)
                     return phase.from + ((phase.to - phase.from) * f).toLong()
@@ -172,6 +164,8 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
         val fit = MapRenderer.fitFor(r, spec)
         val p = MapRenderer.plan(r, fit, fromMillis, toMillis)
         plan = p
+        pacingPhases = buildPacing(p)
+        pacingWeight = pacingPhases.sumOf { it.weight }
         progressT = 1f
         playing = false
 
@@ -212,6 +206,18 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
             }
             status = if (ok) "갤러리에 저장했어" else "저장 실패"
             onDone(ok)
+        }
+    }
+
+    private fun buildPacing(p: Plan): List<PacingPhase> = buildList {
+        p.segments.forEachIndexed { i, seg ->
+            val travelHours = (seg.arriveAt - seg.departAt).coerceAtLeast(1L) / 3_600_000.0
+            add(PacingPhase(seg.departAt, seg.arriveAt, sqrt(travelHours.coerceAtLeast(0.25))))
+            val next = p.segments.getOrNull(i + 1)?.departAt ?: p.endAt
+            if (next > seg.arriveAt) {
+                val stayHours = (next - seg.arriveAt) / 3_600_000.0
+                add(PacingPhase(seg.arriveAt, next, sqrt(stayHours.coerceAtLeast(0.25)) * 1.35))
+            }
         }
     }
 

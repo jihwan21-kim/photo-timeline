@@ -19,6 +19,7 @@ import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.round
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 enum class Ratio(val label: String, val w: Int, val h: Int) {
     STORY("9:16", 1080, 1920),
@@ -41,6 +42,13 @@ class Fit(val z: Int, val world: Double, val ox: Double, val oy: Double, private
         return (wrapped - ox).toFloat()
     }
     fun y(lat: Double) = (mercatorY(lat, world) - oy).toFloat()
+
+    fun xAfter(lon: Double, previousX: Float, forceEast: Boolean): Float {
+        val raw = (mercatorX(lon, world) - ox).toFloat()
+        var x = raw + (round((previousX - raw) / world) * world).toFloat()
+        if (forceEast && x < previousX) x += world.toFloat()
+        return x
+    }
 }
 
 /** One trip between two stops, pre-projected so playback never re-does this work. */
@@ -118,10 +126,15 @@ object MapRenderer {
         var minY = Double.MAX_VALUE
         var maxY = -Double.MAX_VALUE
         var previousX: Double? = null
+        var previousLon: Double? = null
         for (n in route.stops) {
             val rawX = mercatorX(n.lon, world)
-            val x = previousX?.let { rawX + round((it - rawX) / world) * world } ?: rawX
+            var x = previousX?.let { rawX + round((it - rawX) / world) * world } ?: rawX
+            if (previousLon != null && eastwardTransition(previousLon, n.lon) && previousX != null && x < previousX) {
+                x += world
+            }
             previousX = x
+            previousLon = n.lon
             val y = mercatorY(n.lat, world)
             if (x < minX) minX = x
             if (x > maxX) maxX = x
@@ -137,16 +150,23 @@ object MapRenderer {
     fun plan(route: Route, fit: Fit, from: Long, to: Long): Plan {
         val segments = ArrayList<Segment>()
         val seen = HashMap<String, Int>()
+        val nodePositions = HashMap<Int, Pair<Float, Float>>()
         val measure = PathMeasure()
 
+        var previousEndX: Float? = null
         for (i in 1 until route.stops.size) {
             val a = route.stops[i - 1]
             val b = route.stops[i]
             if (a.node == b.node) continue
 
-            val ax = fit.x(a.lon); val ay = fit.y(a.lat)
-            val bx = fit.x(b.lon); val by = fit.y(b.lat)
+            val ax = previousEndX ?: fit.x(a.lon)
+            val ay = fit.y(a.lat)
+            val bx = fit.xAfter(b.lon, ax, eastwardTransition(a.lon, b.lon))
+            val by = fit.y(b.lat)
             val len = hypot(bx - ax, by - ay)
+            previousEndX = bx
+            nodePositions.putIfAbsent(a.node, ax to ay)
+            nodePositions.putIfAbsent(b.node, bx to by)
 
             val path = Path().apply {
                 moveTo(ax, ay)
@@ -179,7 +199,8 @@ object MapRenderer {
         val firstSeen = HashMap<Int, Long>()
         for (s in route.stops) firstSeen.putIfAbsent(s.node, s.t0)
         val dots = route.nodes.mapIndexed { i, n ->
-            NodeDot(fit.x(n.lon), fit.y(n.lat), firstSeen[i] ?: from)
+            val point = nodePositions[i] ?: (fit.x(n.lon) to fit.y(n.lat))
+            NodeDot(point.first, point.second, firstSeen[i] ?: from)
         }
 
         val start = route.stops.firstOrNull()?.t0 ?: from
@@ -269,8 +290,9 @@ object MapRenderer {
                 kmSoFar += seg.km
                 headX = seg.endX; headY = seg.endY
             } else {
-                val f = ((cursor - seg.departAt).toFloat() /
+                val linear = ((cursor - seg.departAt).toFloat() /
                     (seg.arriveAt - seg.departAt).toFloat()).coerceIn(0f, 1f)
+                val f = smoothStep(linear)
                 measure.setPath(seg.path, false)
                 scratch.reset()
                 if (measure.getSegment(0f, measure.length * f, scratch, true)) {
@@ -324,19 +346,20 @@ object MapRenderer {
         val first = plan.dots.firstOrNull()
         var x = first?.x ?: 0f
         var y = first?.y ?: 0f
-        var zoom = 1.18f
+        var zoom = 1.9f
         for (seg in plan.segments) {
             if (cursor < seg.departAt) break
             if (cursor >= seg.arriveAt) {
-                x = seg.endX; y = seg.endY; zoom = 1.42f
+                x = seg.endX; y = seg.endY; zoom = 1.9f
             } else {
-                val f = ((cursor - seg.departAt).toFloat() / (seg.arriveAt - seg.departAt)).coerceIn(0f, 1f)
+                val linear = ((cursor - seg.departAt).toFloat() / (seg.arriveAt - seg.departAt)).coerceIn(0f, 1f)
+                val f = smoothStep(linear)
                 measure.setPath(seg.path, false)
                 measure.getPosTan(measure.length * f, pos, null)
                 x = pos[0]; y = pos[1]
-                val travelZoom = (900f / seg.length.coerceAtLeast(1f)).coerceIn(1.08f, 2.05f)
-                val ease = 1f - kotlin.math.abs(f * 2f - 1f)
-                zoom = 1.42f + (travelZoom - 1.42f) * ease
+                val travelZoom = (780f / seg.length.coerceAtLeast(1f)).coerceIn(1.04f, 1.55f)
+                val zoomOut = sin(Math.PI.toFloat() * linear).let { it * it }
+                zoom = 1.9f + (travelZoom - 1.9f) * zoomOut
                 break
             }
         }
@@ -354,6 +377,14 @@ object MapRenderer {
             }
         }
         return km
+    }
+
+    private fun smoothStep(v: Float): Float = v * v * (3f - 2f * v)
+
+    private fun eastwardTransition(fromLon: Double, toLon: Double): Boolean {
+        val europeToAsia = fromLon in -25.0..60.0 && toLon > 60.0
+        val asiaToAmerica = fromLon > 60.0 && toLon in -170.0..-30.0
+        return europeToAsia || asiaToAmerica
     }
 
     private fun drawCard(c: Canvas, spec: CardSpec, plan: Plan, cursor: Long, kmSoFar: Double) {
