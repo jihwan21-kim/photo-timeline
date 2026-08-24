@@ -17,6 +17,7 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import kotlin.math.floor
 import kotlin.math.hypot
+import kotlin.math.round
 import kotlin.math.roundToInt
 
 enum class Ratio(val label: String, val w: Int, val h: Int) {
@@ -33,8 +34,12 @@ data class CardSpec(
 )
 
 /** Viewport transform: map coordinates -> card pixels. */
-class Fit(val z: Int, val world: Double, val ox: Double, val oy: Double) {
-    fun x(lon: Double) = (mercatorX(lon, world) - ox).toFloat()
+class Fit(val z: Int, val world: Double, val ox: Double, val oy: Double, private val centerWorldX: Double) {
+    fun x(lon: Double): Float {
+        val raw = mercatorX(lon, world)
+        val wrapped = raw + round((centerWorldX - raw) / world) * world
+        return (wrapped - ox).toFloat()
+    }
     fun y(lat: Double) = (mercatorY(lat, world) - oy).toFloat()
 }
 
@@ -103,7 +108,8 @@ object MapRenderer {
         val b = bounds(route, world)
         val cx = PAD_SIDE + boxW / 2.0
         val cy = PAD_TOP + boxH / 2.0
-        return Fit(z, world, (b[0] + b[1]) / 2 - cx, (b[2] + b[3]) / 2 - cy)
+        val centerX = (b[0] + b[1]) / 2
+        return Fit(z, world, centerX - cx, (b[2] + b[3]) / 2 - cy, centerX)
     }
 
     private fun bounds(route: Route, world: Double): DoubleArray {
@@ -111,8 +117,11 @@ object MapRenderer {
         var maxX = -Double.MAX_VALUE
         var minY = Double.MAX_VALUE
         var maxY = -Double.MAX_VALUE
-        for (n in route.nodes) {
-            val x = mercatorX(n.lon, world)
+        var previousX: Double? = null
+        for (n in route.stops) {
+            val rawX = mercatorX(n.lon, world)
+            val x = previousX?.let { rawX + round((it - rawX) / world) * world } ?: rawX
+            previousX = x
             val y = mercatorY(n.lat, world)
             if (x < minX) minX = x
             if (x > maxX) maxX = x
@@ -204,7 +213,6 @@ object MapRenderer {
                 c.drawBitmap(tile, null, RectF(left, top, left + 256f, top + 256f), paint)
             }
         }
-        drawAttribution(c, w, h)
         bmp
     }
 
@@ -242,7 +250,7 @@ object MapRenderer {
 
     /** Synchronized: the UI draw pass and snapshot() share these Paint/PathMeasure objects. */
     @Synchronized
-    fun drawOverlay(c: Canvas, plan: Plan, spec: CardSpec, cursor: Long) {
+    private fun drawRoute(c: Canvas, plan: Plan, spec: CardSpec, cursor: Long) {
         var kmSoFar = 0.0
         var headX = plan.dots.firstOrNull()?.x ?: 0f
         var headY = plan.dots.firstOrNull()?.y ?: 0f
@@ -285,7 +293,67 @@ object MapRenderer {
         c.drawCircle(headX, headY, 30f, ringPaint)
         c.drawCircle(headX, headY, 20f, corePaint)
 
-        drawCard(c, spec, plan, cursor, kmSoFar)
+    }
+
+    /** Draws a gently moving camera while keeping the title card fixed on screen. */
+    @Synchronized
+    fun drawScene(c: Canvas, base: Bitmap, plan: Plan, spec: CardSpec, cursor: Long) {
+        val w = spec.ratio.w.toFloat()
+        val h = spec.ratio.h.toFloat()
+        val camera = cameraAt(plan, cursor)
+        val halfW = w / (2f * camera.zoom)
+        val halfH = h / (2f * camera.zoom)
+        val cx = camera.x.coerceIn(halfW, w - halfW)
+        val cy = camera.y.coerceIn(halfH, h - halfH)
+
+        val save = c.save()
+        c.translate(w / 2f, h / 2f)
+        c.scale(camera.zoom, camera.zoom)
+        c.translate(-cx, -cy)
+        c.drawBitmap(base, 0f, 0f, null)
+        drawRoute(c, plan, spec, cursor)
+        c.restoreToCount(save)
+
+        drawCard(c, spec, plan, cursor, distanceAt(plan, cursor))
+        drawAttribution(c, spec.ratio.w, spec.ratio.h)
+    }
+
+    private data class Camera(val x: Float, val y: Float, val zoom: Float)
+
+    private fun cameraAt(plan: Plan, cursor: Long): Camera {
+        val first = plan.dots.firstOrNull()
+        var x = first?.x ?: 0f
+        var y = first?.y ?: 0f
+        var zoom = 1.18f
+        for (seg in plan.segments) {
+            if (cursor < seg.departAt) break
+            if (cursor >= seg.arriveAt) {
+                x = seg.endX; y = seg.endY; zoom = 1.42f
+            } else {
+                val f = ((cursor - seg.departAt).toFloat() / (seg.arriveAt - seg.departAt)).coerceIn(0f, 1f)
+                measure.setPath(seg.path, false)
+                measure.getPosTan(measure.length * f, pos, null)
+                x = pos[0]; y = pos[1]
+                val travelZoom = (900f / seg.length.coerceAtLeast(1f)).coerceIn(1.08f, 2.05f)
+                val ease = 1f - kotlin.math.abs(f * 2f - 1f)
+                zoom = 1.42f + (travelZoom - 1.42f) * ease
+                break
+            }
+        }
+        return Camera(x, y, zoom)
+    }
+
+    private fun distanceAt(plan: Plan, cursor: Long): Double {
+        var km = 0.0
+        for (seg in plan.segments) {
+            if (cursor <= seg.departAt) break
+            if (cursor >= seg.arriveAt) km += seg.km else {
+                val f = ((cursor - seg.departAt).toDouble() / (seg.arriveAt - seg.departAt)).coerceIn(0.0, 1.0)
+                km += seg.km * f
+                break
+            }
+        }
+        return km
     }
 
     private fun drawCard(c: Canvas, spec: CardSpec, plan: Plan, cursor: Long, kmSoFar: Double) {
@@ -326,7 +394,7 @@ object MapRenderer {
     suspend fun snapshot(base: Bitmap, plan: Plan, spec: CardSpec, cursor: Long): Bitmap =
         withContext(Dispatchers.Default) {
             val out = base.copy(Bitmap.Config.ARGB_8888, true)
-            drawOverlay(Canvas(out), plan, spec, cursor)
+            drawScene(Canvas(out), base, plan, spec, cursor)
             out
         }
 

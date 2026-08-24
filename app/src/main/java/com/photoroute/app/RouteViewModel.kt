@@ -16,6 +16,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Calendar
+import kotlin.math.sqrt
 
 class RouteViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -47,8 +48,10 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     var progressT by mutableStateOf(1f); private set   // 0..1 along the trip
     var speed by mutableStateOf(1f); private set
     var durationSec by mutableStateOf(14f); private set
+    var exportingVideo by mutableStateOf(false); private set
+    var videoProgress by mutableStateOf(0f); private set
     /** true = every leg gets equal screen time; false = wall-clock proportional. */
-    var evenPacing by mutableStateOf(true); private set
+    var evenPacing by mutableStateOf(false); private set
 
     private var allPhotos: List<Photo> = emptyList()
 
@@ -61,7 +64,30 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun cursorAt(t: Float): Long {
         val p = plan ?: return 0L
-        if (!evenPacing) return p.startAt + (p.spanMillis * t).toLong()
+        if (!evenPacing) {
+            data class Phase(val from: Long, val to: Long, val weight: Double)
+            val phases = ArrayList<Phase>()
+            p.segments.forEachIndexed { i, seg ->
+                val travelHours = (seg.arriveAt - seg.departAt).coerceAtLeast(1L) / 3_600_000.0
+                phases += Phase(seg.departAt, seg.arriveAt, sqrt(travelHours.coerceAtLeast(0.25)))
+                val next = p.segments.getOrNull(i + 1)?.departAt ?: p.endAt
+                if (next > seg.arriveAt) {
+                    val stayHours = (next - seg.arriveAt) / 3_600_000.0
+                    phases += Phase(seg.arriveAt, next, sqrt(stayHours.coerceAtLeast(0.25)) * 1.35)
+                }
+            }
+            if (phases.isEmpty()) return p.startAt
+            val total = phases.sumOf { it.weight }
+            var target = t.coerceIn(0f, 1f) * total
+            for (phase in phases) {
+                if (target <= phase.weight) {
+                    val f = (target / phase.weight).coerceIn(0.0, 1.0)
+                    return phase.from + ((phase.to - phase.from) * f).toLong()
+                }
+                target -= phase.weight
+            }
+            return p.endAt
+        }
         val n = p.segments.size
         if (n == 0) return p.startAt
         val x = (t * n).coerceIn(0f, n.toFloat())
@@ -186,6 +212,24 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
             }
             status = if (ok) "갤러리에 저장했어" else "저장 실패"
             onDone(ok)
+        }
+    }
+
+    fun saveVideo() {
+        if (exportingVideo) return
+        val base = basemap ?: return
+        val p = plan ?: return
+        exportingVideo = true
+        videoProgress = 0f
+        playing = false
+        viewModelScope.launch {
+            val ok = VideoExporter.export(
+                getApplication(), base, p, spec, durationSec,
+                cursorAt = { cursorAt(it) },
+                onProgress = { videoProgress = it },
+            )
+            exportingVideo = false
+            status = if (ok) "영상이 갤러리에 저장됐어" else "영상 저장에 실패했어"
         }
     }
 

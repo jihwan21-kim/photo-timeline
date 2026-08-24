@@ -222,8 +222,18 @@ fun Screen(vm: RouteViewModel = viewModel()) {
             colors = ButtonDefaults.buttonColors(containerColor = Accent),
         ) { Text("이 장면 저장") }
 
+        Button(
+            onClick = { vm.saveVideo() },
+            Modifier.fillMaxWidth(),
+            enabled = vm.basemap != null && !vm.exportingVideo,
+            colors = ButtonDefaults.buttonColors(containerColor = Accent),
+        ) { Text(if (vm.exportingVideo) "영상 만드는 중…" else "동선 영상 저장") }
+        if (vm.exportingVideo) {
+            LinearProgressIndicator({ vm.videoProgress }, Modifier.fillMaxWidth(), color = Accent)
+        }
+
         Text(
-            "움직이는 화면을 그대로 남기려면 재생하면서 안드로이드 화면 녹화를 쓰면 돼.",
+            "저장한 MP4 영상은 갤러리의 Movies/동선지도에서 확인할 수 있어.",
             color = Graphite, fontSize = 11.sp,
         )
     }
@@ -249,8 +259,7 @@ private fun MapPreview(vm: RouteViewModel) {
                     val nc = canvas.nativeCanvas
                     val save = nc.save()
                     nc.scale(s, s)
-                    nc.drawBitmap(base, 0f, 0f, null)
-                    MapRenderer.drawOverlay(nc, plan, vm.spec, at)
+                    MapRenderer.drawScene(nc, base, plan, vm.spec, at)
                     nc.restoreToCount(save)
                 }
             }
@@ -292,7 +301,7 @@ private fun PlaybackBar(vm: RouteViewModel) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(vm.evenPacing, { vm.updateEvenPacing(it) })
             Text(
-                if (vm.evenPacing) "구간마다 같은 시간" else "실제 시간 비율",
+                if (vm.evenPacing) "구간마다 같은 시간" else "체류시간 반영 (압축)",
                 color = Graphite, fontSize = 11.5.sp,
             )
         }
