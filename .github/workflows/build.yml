@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [main, codex/timeline-json-export]
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
