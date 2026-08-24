@@ -74,6 +74,26 @@ fun Screen(vm: RouteViewModel = viewModel()) {
     var showFolders by remember { mutableStateOf(false) }
     var showStops by remember { mutableStateOf(false) }
 
+    val saveTimelineDocument = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { destination ->
+        if (destination != null) vm.savePreparedTimeline(destination)
+        else vm.cancelTimelineSave()
+    }
+
+    val pickTimelinePhotos = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) vm.prepareTimelineJson(uris)
+    }
+
+    val requestTimelineLocation = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { allowed ->
+        if (!allowed) vm.timelineLocationPermissionDenied()
+        pickTimelinePhotos.launch(arrayOf("image/*"))
+    }
+
     val ask = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { res ->
@@ -82,6 +102,14 @@ fun Screen(vm: RouteViewModel = viewModel()) {
     }
 
     LaunchedEffect(granted) { if (granted) vm.loadBuckets() }
+
+    LaunchedEffect(vm.timelineReadyToSave) {
+        if (vm.timelineReadyToSave) {
+            vm.consumeTimelineSaveRequest()
+            runCatching { saveTimelineDocument.launch("Timeline.json") }
+                .onFailure { vm.timelineSaveLaunchFailed() }
+        }
+    }
 
     // playback clock
     LaunchedEffect(vm.playing) {
@@ -102,6 +130,53 @@ fun Screen(vm: RouteViewModel = viewModel()) {
     ) {
         Text("동선 지도", color = TextC, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text("사진은 기기 밖으로 나가지 않아.", color = Graphite, fontSize = 12.sp)
+
+        Card(colors = CardDefaults.cardColors(containerColor = Panel)) {
+            Column(
+                Modifier.fillMaxWidth().padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Label("GOOGLE TIMELINE VISUALIZER")
+                Text("Timeline.json 만들기", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "고른 원본 사진의 GPS와 촬영시간만 추출해. 사진 파일 자체는 JSON에 들어가지 않아.",
+                    color = Graphite,
+                    fontSize = 11.5.sp,
+                )
+                Button(
+                    onClick = {
+                        if (
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+                            ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.ACCESS_MEDIA_LOCATION,
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            pickTimelinePhotos.launch(arrayOf("image/*"))
+                        } else {
+                            requestTimelineLocation.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !vm.preparingTimeline,
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                ) {
+                    Text(if (vm.preparingTimeline) "위치정보 읽는 중…" else "사진 골라 Timeline.json 만들기")
+                }
+                if (vm.preparingTimeline) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Accent)
+                if (vm.timelineStatus.isNotBlank()) {
+                    Text(vm.timelineStatus, color = Graphite, fontSize = 11.sp)
+                }
+                if (vm.timelineCanSave && !vm.timelineReadyToSave && !vm.preparingTimeline) {
+                    OutlinedButton(
+                        onClick = { vm.requestTimelineSave() },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("저장 위치 다시 고르기")
+                    }
+                }
+            }
+        }
 
         MapPreview(vm)
 
