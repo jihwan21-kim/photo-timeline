@@ -125,7 +125,7 @@ fun Screen(vm: RouteViewModel = viewModel()) {
             Source.entries.forEach { s ->
                 val on = vm.source == s
                 OutlinedButton(
-                    { vm.setSource(s) }, Modifier.weight(1f),
+                    { vm.updateSource(s) }, Modifier.weight(1f),
                     colors = ButtonDefaults.outlinedButtonColors(
                         containerColor = if (on) Accent else Color.Transparent,
                         contentColor = if (on) Color.White else Graphite,
@@ -182,7 +182,7 @@ fun Screen(vm: RouteViewModel = viewModel()) {
 
         Label("제목")
         OutlinedTextField(
-            vm.spec.title, { vm.setSpec(vm.spec.copy(title = it)) },
+            vm.spec.title, { vm.updateSpec(vm.spec.copy(title = it)) },
             Modifier.fillMaxWidth(), singleLine = true,
         )
 
@@ -191,7 +191,7 @@ fun Screen(vm: RouteViewModel = viewModel()) {
             Ratio.entries.forEach { r ->
                 val on = vm.spec.ratio == r
                 OutlinedButton(
-                    { vm.setSpec(vm.spec.copy(ratio = r)) }, Modifier.weight(1f),
+                    { vm.updateSpec(vm.spec.copy(ratio = r)) }, Modifier.weight(1f),
                     colors = ButtonDefaults.outlinedButtonColors(
                         containerColor = if (on) Accent else Color.Transparent,
                         contentColor = if (on) Color.White else Graphite,
@@ -204,7 +204,7 @@ fun Screen(vm: RouteViewModel = viewModel()) {
         Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
             listOf(0xFFFF2D74L, 0xFF1F6FEBL, 0xFF14A06AL, 0xFFF08C00L, 0xFF6E56CFL).forEach { hex ->
                 OutlinedButton(
-                    { vm.setSpec(vm.spec.copy(color = hex.toInt())) },
+                    { vm.updateSpec(vm.spec.copy(color = hex.toInt())) },
                     Modifier.weight(1f).height(38.dp),
                     colors = ButtonDefaults.outlinedButtonColors(containerColor = Color(hex)),
                 ) {}
@@ -212,9 +212,9 @@ fun Screen(vm: RouteViewModel = viewModel()) {
         }
 
         Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
-            OutlinedButton({ vm.setSpec(vm.spec.copy(zoomAdjust = vm.spec.zoomAdjust + 1)) }, Modifier.weight(1f)) { Text("＋") }
-            OutlinedButton({ vm.setSpec(vm.spec.copy(zoomAdjust = vm.spec.zoomAdjust - 1)) }, Modifier.weight(1f)) { Text("－") }
-            OutlinedButton({ vm.setSpec(vm.spec.copy(zoomAdjust = 0)) }, Modifier.weight(2f)) { Text("다시 맞추기", fontSize = 12.sp) }
+            OutlinedButton({ vm.updateSpec(vm.spec.copy(zoomAdjust = vm.spec.zoomAdjust + 1)) }, Modifier.weight(1f)) { Text("＋") }
+            OutlinedButton({ vm.updateSpec(vm.spec.copy(zoomAdjust = vm.spec.zoomAdjust - 1)) }, Modifier.weight(1f)) { Text("－") }
+            OutlinedButton({ vm.updateSpec(vm.spec.copy(zoomAdjust = 0)) }, Modifier.weight(2f)) { Text("다시 맞추기", fontSize = 12.sp) }
         }
 
         Button(
@@ -278,7 +278,7 @@ private fun PlaybackBar(vm: RouteViewModel) {
             Spacer(Modifier.width(8.dp))
             listOf(1f, 2f, 4f).forEach { s ->
                 val on = vm.speed == s
-                TextButton({ vm.setSpeed(s) }, Modifier.width(46.dp)) {
+                TextButton({ vm.updateSpeed(s) }, Modifier.width(46.dp)) {
                     Text("${s.toInt()}×", fontSize = 12.sp, color = if (on) Accent else Graphite)
                 }
             }
@@ -288,9 +288,9 @@ private fun PlaybackBar(vm: RouteViewModel) {
                 color = TextC, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
             )
         }
-        Slider(vm.progressT, { vm.setProgressT(it) }, valueRange = 0f..1f)
+        Slider(vm.progressT, { vm.seekTo(it) }, valueRange = 0f..1f)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(vm.evenPacing, { vm.setEvenPacing(it) })
+            Checkbox(vm.evenPacing, { vm.updateEvenPacing(it) })
             Text(
                 if (vm.evenPacing) "구간마다 같은 시간" else "실제 시간 비율",
                 color = Graphite, fontSize = 11.5.sp,

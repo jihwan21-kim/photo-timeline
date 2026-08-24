@@ -77,21 +77,21 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---- setters ----
-    fun setSource(s: Source) { source = s }
+    fun updateSource(s: Source) { source = s }
     fun setRange(from: Long, to: Long) { fromMillis = from; toMillis = to }
     fun toggleBucket(id: Long) {
         selectedBuckets = if (id in selectedBuckets) selectedBuckets - id else selectedBuckets + id
     }
     fun clearBuckets() { selectedBuckets = emptySet() }
     fun setRadius(v: Float) { radiusKm = v; rebuild() }
-    fun setSpec(s: CardSpec) {
+    fun updateSpec(s: CardSpec) {
         val refit = s.ratio != spec.ratio || s.zoomAdjust != spec.zoomAdjust
         spec = s
         if (refit) rebuild()
     }
-    fun setSpeed(v: Float) { speed = v }
-    fun setEvenPacing(v: Boolean) { evenPacing = v }
-    fun setProgressT(v: Float) { progressT = v.coerceIn(0f, 1f); if (v < 1f) playing = false }
+    fun updateSpeed(v: Float) { speed = v }
+    fun updateEvenPacing(v: Boolean) { evenPacing = v }
+    fun seekTo(v: Float) { progressT = v.coerceIn(0f, 1f); if (v < 1f) playing = false }
 
     fun play() {
         val p = plan ?: return
