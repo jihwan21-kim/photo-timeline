@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.Dongseon" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#0F1317</item>
+        <item name="android:navigationBarColor">#0F1317</item>
+        <item name="android:windowBackground">#0F1317</item>
+    </style>
+</resources>
