@@ -54,6 +54,7 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     var durationSec by mutableStateOf(14f); private set
     var exportingVideo by mutableStateOf(false); private set
     var videoProgress by mutableStateOf(0f); private set
+    var tileRevision by mutableStateOf(0); private set
     /** true = every leg gets equal screen time; false = wall-clock proportional. */
     var evenPacing by mutableStateOf(false); private set
 
@@ -61,6 +62,10 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     private val removedPhotoGroups = ArrayDeque<List<Photo>>()
     private var pacingPhases: List<PacingPhase> = emptyList()
     private var pacingWeight = 0.0
+
+    init {
+        MapRenderer.initialize(app)
+    }
 
     val cursor: Long get() = cursorAt(progressT)
 
@@ -119,11 +124,14 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
         if (p.segments.isEmpty()) return
         if (progressT >= 1f) progressT = 0f
         val start = cursorAt(progressT)
-        val ahead = cursorAt((progressT + 0.025f).coerceAtMost(1f))
+        val ahead1 = cursorAt((progressT + 0.015f).coerceAtMost(1f))
+        val ahead2 = cursorAt((progressT + 0.030f).coerceAtMost(1f))
         tilePrepareJob?.cancel()
         tilePrepareJob = viewModelScope.launch {
             MapRenderer.prepareTiles(p, spec, start)
-            MapRenderer.prepareTiles(p, spec, ahead)
+            MapRenderer.prepareTiles(p, spec, ahead1)
+            MapRenderer.prepareTiles(p, spec, ahead2)
+            tileRevision++
             playing = true
         }
     }
@@ -192,15 +200,18 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun prepareCameraTiles(force: Boolean = false) {
         val p = plan ?: return
-        val bucket = (progressT * 50).toInt()
+        val bucket = (progressT * 100).toInt()
         if (!force && bucket == lastTileBucket) return
         if (tilePrepareJob?.isActive == true) return
         lastTileBucket = bucket
         val current = cursorAt(progressT)
-        val ahead = cursorAt((progressT + 0.025f).coerceAtMost(1f))
+        val ahead1 = cursorAt((progressT + 0.015f).coerceAtMost(1f))
+        val ahead2 = cursorAt((progressT + 0.030f).coerceAtMost(1f))
         tilePrepareJob = viewModelScope.launch {
             MapRenderer.prepareTiles(p, spec, current)
-            MapRenderer.prepareTiles(p, spec, ahead)
+            MapRenderer.prepareTiles(p, spec, ahead1)
+            MapRenderer.prepareTiles(p, spec, ahead2)
+            tileRevision++
         }
     }
 

@@ -44,6 +44,9 @@ fun haversine(aLat: Double, aLon: Double, bLat: Double, bLon: Double): Double {
 
 fun mercatorX(lon: Double, world: Double) = (lon + 180.0) / 360.0 * world
 
+internal fun unwrapWorldNear(value: Double, reference: Double, world: Double): Double =
+    value + kotlin.math.round((reference - value) / world) * world
+
 fun mercatorY(lat: Double, world: Double): Double {
     val s = sin(lat.coerceIn(-85.0511, 85.0511) * PI / 180.0)
     return (0.5 - ln((1 + s) / (1 - s)) / (4 * PI)) * world
@@ -65,7 +68,8 @@ fun buildRoute(photos: List<Photo>, radiusKm: Double): Route {
         if (c != null && haversine(c.lat, c.lon, p.lat, p.lon) <= radiusKm) {
             c.count++
             c.lat += (p.lat - c.lat) / c.count      // running centroid
-            c.lon += (p.lon - c.lon) / c.count
+            val continuousLon = unwrapLongitudeNear(p.lon, c.lon)
+            c.lon += (continuousLon - c.lon) / c.count
             c.t1 = p.time
         } else {
             cur = Stop(p.lat, p.lon, p.time).also { stops.add(it) }
@@ -94,4 +98,11 @@ fun buildRoute(photos: List<Photo>, radiusKm: Double): Route {
         if (existing != null) existing.weight++ else legs.add(Leg(a.node, b.node, d))
     }
     return Route(stops, nodes, legs, total)
+}
+
+private fun unwrapLongitudeNear(value: Double, reference: Double): Double {
+    var result = value
+    while (result - reference > 180.0) result -= 360.0
+    while (result - reference < -180.0) result += 360.0
+    return result
 }

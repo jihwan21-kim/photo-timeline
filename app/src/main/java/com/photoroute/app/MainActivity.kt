@@ -309,6 +309,7 @@ private fun MapPreview(vm: RouteViewModel) {
         if (base != null && plan != null) {
             Canvas(Modifier.fillMaxSize()) {
                 val at = vm.cursor          // read in draw phase -> only redraws, no recomposition
+                vm.tileRevision             // redraw as soon as newly requested map tiles arrive
                 val s = size.width / ratio.w
                 drawIntoCanvas { canvas ->
                     val nc = canvas.nativeCanvas

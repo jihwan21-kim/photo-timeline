@@ -34,6 +34,14 @@ object VideoExporter {
         var muxer: MediaMuxer? = null
         var surface: android.view.Surface? = null
         try {
+            // Prepare the complete camera path first so exported frames never outrun map loading.
+            val tileSamples = 60
+            for (sample in 0..tileSamples) {
+                val progress = sample.toFloat() / tileSamples
+                MapRenderer.prepareTiles(plan, spec, cursorAt(progress))
+                onProgress(progress * 0.15f)
+            }
+
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                 setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE)
@@ -90,7 +98,7 @@ object VideoExporter {
                     inputSurface.unlockCanvasAndPost(canvas)
                 }
                 drain(false)
-                onProgress(progress)
+                onProgress(0.15f + progress * 0.85f)
                 targetTime += frameNanos
                 val wait = targetTime - System.nanoTime()
                 if (wait > 0) Thread.sleep(wait / 1_000_000L, (wait % 1_000_000L).toInt())

@@ -42,4 +42,5 @@ dependencies {
     implementation(libs.material3)
     implementation(libs.exifinterface)
     debugImplementation(libs.compose.tooling)
+    testImplementation(libs.junit)
 }
