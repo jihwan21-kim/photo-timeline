@@ -418,7 +418,7 @@ object MapRenderer {
         val dx = seg.spanX.coerceAtLeast(1f)
         val dy = seg.spanY.coerceAtLeast(1f)
         val aspect = spec.ratio.w.toFloat() / spec.ratio.h
-        return maxOf(dy * 2.8f, dx * 2.8f / aspect, plan.fit.world.toFloat() * 0.00035f)
+        return maxOf(dy * 1.25f, dx * 1.25f / aspect, plan.fit.world.toFloat() * 0.00035f)
             .coerceAtMost(plan.fit.world.toFloat() * 0.72f)
     }
 
