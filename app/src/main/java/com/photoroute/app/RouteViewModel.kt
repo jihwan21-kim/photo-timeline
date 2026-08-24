@@ -56,6 +56,7 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     var evenPacing by mutableStateOf(false); private set
 
     private var allPhotos: List<Photo> = emptyList()
+    private val removedPhotoGroups = ArrayDeque<List<Photo>>()
     private var pacingPhases: List<PacingPhase> = emptyList()
     private var pacingWeight = 0.0
 
@@ -140,6 +141,7 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
                 progress = if (total > 0) done.toFloat() / total else 0f
             }
             allPhotos = result.photos
+            removedPhotoGroups.clear()
             status = buildString {
                 append("${result.scanned}장 확인 · 좌표 있음 ${result.photos.size}장")
                 if (result.skippedNotMine > 0) append(" · 내 촬영 아님 ${result.skippedNotMine}장 제외")
@@ -208,6 +210,24 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
             onDone(ok)
         }
     }
+
+    fun removeStop(stop: Stop) {
+        val removed = allPhotos.filter { it.time in stop.t0..stop.t1 }
+        if (removed.isEmpty()) return
+        allPhotos = allPhotos.filterNot { it.time in stop.t0..stop.t1 }
+        removedPhotoGroups.addLast(removed)
+        status = "정거장 1개를 동선에서 제거했어"
+        rebuild()
+    }
+
+    fun undoRemoveStop() {
+        val restored = removedPhotoGroups.removeLastOrNull() ?: return
+        allPhotos = (allPhotos + restored).sortedBy { it.time }
+        status = "마지막으로 제거한 정거장을 복구했어"
+        rebuild()
+    }
+
+    val canUndoRemove: Boolean get() = removedPhotoGroups.isNotEmpty()
 
     private fun buildPacing(p: Plan): List<PacingPhase> = buildList {
         p.segments.forEachIndexed { i, seg ->

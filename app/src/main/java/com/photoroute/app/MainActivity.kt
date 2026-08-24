@@ -11,6 +11,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -70,6 +72,7 @@ fun Screen(vm: RouteViewModel = viewModel()) {
     }
     var showDates by remember { mutableStateOf(false) }
     var showFolders by remember { mutableStateOf(false) }
+    var showStops by remember { mutableStateOf(false) }
 
     val ask = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -112,6 +115,16 @@ fun Screen(vm: RouteViewModel = viewModel()) {
                 Stat("거리", MapRenderer.km(r.km))
                 Stat("정거장", "${r.nodes.size}")
                 Stat("구간", "${vm.plan?.segments?.size ?: 0}")
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton({ showStops = true }, Modifier.weight(1f)) {
+                    Text("잘못된 지점 제거", fontSize = 12.sp)
+                }
+                if (vm.canUndoRemove) {
+                    OutlinedButton({ vm.undoRemoveStop() }, Modifier.weight(1f)) {
+                        Text("마지막 제거 취소", fontSize = 12.sp)
+                    }
+                }
             }
         }
 
@@ -239,6 +252,48 @@ fun Screen(vm: RouteViewModel = viewModel()) {
     }
 
     if (showDates) DateRangeDialog(vm) { showDates = false }
+    if (showStops) StopEditorDialog(vm) { showStops = false }
+}
+
+@Composable
+private fun StopEditorDialog(vm: RouteViewModel, onClose: () -> Unit) {
+    val stops = vm.route?.stops.orEmpty()
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("잘못된 지점 제거") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "날짜와 좌표를 확인한 뒤 제거하세요. 해당 지점의 사진들이 동선에서 빠지고 앞뒤 경로가 다시 연결됩니다.",
+                    color = Graphite, fontSize = 11.5.sp,
+                )
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp)) {
+                    itemsIndexed(stops, key = { index, stop -> "${stop.t0}-$index" }) { index, stop ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "${index + 1}. ${MapRenderer.day(stop.t0)}  ·  사진 ${stop.count}장",
+                                    color = TextC, fontSize = 12.5.sp,
+                                )
+                                Text(
+                                    "%.5f, %.5f".format(stop.lat, stop.lon),
+                                    color = Graphite, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
+                                )
+                            }
+                            TextButton({ vm.removeStop(stop) }) {
+                                Text("제거", color = Accent, fontSize = 12.sp)
+                            }
+                        }
+                        HorizontalDivider(color = Graphite.copy(alpha = 0.2f))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClose) { Text("완료") } },
+    )
 }
 
 @Composable
