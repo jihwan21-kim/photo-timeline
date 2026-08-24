@@ -15,11 +15,13 @@ import java.net.URL
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.round
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.log2
 
 enum class Ratio(val label: String, val w: Int, val h: Int) {
     STORY("9:16", 1080, 1920),
@@ -88,7 +90,7 @@ class Plan(
 object MapRenderer {
 
     private const val UA = "DongseonMap/1.1 (personal photo route map)"
-    private val tiles = HashMap<String, Bitmap?>()
+    private val tiles = ConcurrentHashMap<String, Bitmap>()
 
     private const val PAD_TOP = 380
     private const val PAD_SIDE = 88
@@ -150,23 +152,30 @@ object MapRenderer {
     fun plan(route: Route, fit: Fit, from: Long, to: Long): Plan {
         val segments = ArrayList<Segment>()
         val seen = HashMap<String, Int>()
-        val nodePositions = HashMap<Int, Pair<Float, Float>>()
         val measure = PathMeasure()
 
-        var previousEndX: Float? = null
+        val stopPositions = ArrayList<Pair<Float, Float>>(route.stops.size)
+        route.stops.forEachIndexed { index, stop ->
+            val y = fit.y(stop.lat)
+            if (index == 0) {
+                stopPositions += fit.x(stop.lon) to y
+            } else {
+                val previous = route.stops[index - 1]
+                val previousX = stopPositions.last().first
+                stopPositions += fit.xAfter(
+                    stop.lon, previousX, eastwardTransition(previous.lon, stop.lon),
+                ) to y
+            }
+        }
+
         for (i in 1 until route.stops.size) {
             val a = route.stops[i - 1]
             val b = route.stops[i]
             if (a.node == b.node) continue
 
-            val ax = previousEndX ?: fit.x(a.lon)
-            val ay = fit.y(a.lat)
-            val bx = fit.xAfter(b.lon, ax, eastwardTransition(a.lon, b.lon))
-            val by = fit.y(b.lat)
+            val (ax, ay) = stopPositions[i - 1]
+            val (bx, by) = stopPositions[i]
             val len = hypot(bx - ax, by - ay)
-            previousEndX = bx
-            nodePositions.putIfAbsent(a.node, ax to ay)
-            nodePositions.putIfAbsent(b.node, bx to by)
 
             val path = Path().apply {
                 moveTo(ax, ay)
@@ -196,11 +205,9 @@ object MapRenderer {
             )
         }
 
-        val firstSeen = HashMap<Int, Long>()
-        for (s in route.stops) firstSeen.putIfAbsent(s.node, s.t0)
-        val dots = route.nodes.mapIndexed { i, n ->
-            val point = nodePositions[i] ?: (fit.x(n.lon) to fit.y(n.lat))
-            NodeDot(point.first, point.second, firstSeen[i] ?: from)
+        val dots = route.stops.mapIndexed { index, stop ->
+            val point = stopPositions[index]
+            NodeDot(point.first, point.second, stop.t0)
         }
 
         val start = route.stops.firstOrNull()?.t0 ?: from
@@ -239,7 +246,7 @@ object MapRenderer {
 
     private fun tile(z: Int, x: Int, y: Int): Bitmap? {
         val key = "$z/$x/$y"
-        if (tiles.containsKey(key)) return tiles[key]
+        tiles[key]?.let { return it }
         val sub = "abcd"[(x + y) % 4]
         val bmp = runCatching {
             val conn = URL("https://$sub.basemaps.cartocdn.com/light_all/$z/$x/$y@2x.png")
@@ -249,7 +256,7 @@ object MapRenderer {
             conn.readTimeout = 8000
             conn.inputStream.use { BitmapFactory.decodeStream(it) }
         }.getOrNull()
-        tiles[key] = bmp
+        if (bmp != null) tiles[key] = bmp
         return bmp
     }
 
@@ -271,7 +278,7 @@ object MapRenderer {
 
     /** Synchronized: the UI draw pass and snapshot() share these Paint/PathMeasure objects. */
     @Synchronized
-    private fun drawRoute(c: Canvas, plan: Plan, spec: CardSpec, cursor: Long) {
+    private fun drawRoute(c: Canvas, plan: Plan, spec: CardSpec, cursor: Long, renderScale: Float = 1f) {
         var kmSoFar = 0.0
         var headX = plan.dots.firstOrNull()?.x ?: 0f
         var headY = plan.dots.firstOrNull()?.y ?: 0f
@@ -283,7 +290,7 @@ object MapRenderer {
             val k = seg.weight.toFloat() / heaviest
             legPaint.color = spec.color
             legPaint.alpha = (255 * (0.42f + 0.58f * k)).toInt()
-            legPaint.strokeWidth = 6.4f + 10.8f * k
+            legPaint.strokeWidth = (6.4f + 10.8f * k) / renderScale
 
             if (cursor >= seg.arriveAt) {
                 c.drawPath(seg.path, legPaint)
@@ -307,63 +314,76 @@ object MapRenderer {
         // stops that exist by now
         dotPaint.color = spec.color
         for (d in plan.dots) {
-            if (cursor >= d.firstSeen) c.drawCircle(d.x, d.y, 11f, dotPaint)
+            if (cursor >= d.firstSeen) c.drawCircle(d.x, d.y, 11f / renderScale, dotPaint)
         }
 
         // the head of the trip
         ringPaint.color = spec.color
-        c.drawCircle(headX, headY, 30f, ringPaint)
-        c.drawCircle(headX, headY, 20f, corePaint)
+        ringPaint.strokeWidth = 10f / renderScale
+        c.drawCircle(headX, headY, 30f / renderScale, ringPaint)
+        c.drawCircle(headX, headY, 20f / renderScale, corePaint)
 
     }
 
-    /** Draws a gently moving camera while keeping the title card fixed on screen. */
+    /** Dynamic tile viewport, following the same camera model as the reference visualizer. */
     @Synchronized
     fun drawScene(c: Canvas, base: Bitmap, plan: Plan, spec: CardSpec, cursor: Long) {
         val w = spec.ratio.w.toFloat()
         val h = spec.ratio.h.toFloat()
-        val camera = cameraAt(plan, cursor)
-        val halfW = w / (2f * camera.zoom)
-        val halfH = h / (2f * camera.zoom)
-        val cx = camera.x.coerceIn(halfW, w - halfW)
-        val cy = camera.y.coerceIn(halfH, h - halfH)
+        val viewport = viewportAt(plan, spec, cursor)
+        c.drawColor(0xFFE9E6E0.toInt())
+        if (!drawDynamicTiles(c, viewport, w, h)) c.drawBitmap(base, 0f, 0f, null)
 
+        val scale = h / viewport.spanYPixels
         val save = c.save()
         c.translate(w / 2f, h / 2f)
-        c.scale(camera.zoom, camera.zoom)
-        c.translate(-cx, -cy)
-        c.drawBitmap(base, 0f, 0f, null)
-        drawRoute(c, plan, spec, cursor)
+        c.scale(scale, scale)
+        c.translate(-viewport.centerX, -viewport.centerY)
+        drawRoute(c, plan, spec, cursor, scale)
         c.restoreToCount(save)
 
         drawCard(c, spec, plan, cursor, distanceAt(plan, cursor))
         drawAttribution(c, spec.ratio.w, spec.ratio.h)
     }
 
-    private data class Camera(val x: Float, val y: Float, val zoom: Float)
+    private data class Camera(val x: Float, val y: Float, val spanY: Float)
+    private data class DynamicViewport(
+        val centerX: Float,
+        val centerY: Float,
+        val spanYPixels: Float,
+        val minWorldX: Double,
+        val maxWorldX: Double,
+        val minWorldY: Double,
+        val maxWorldY: Double,
+        val tileZoom: Int,
+    )
 
     private fun cameraAt(plan: Plan, cursor: Long): Camera {
         val first = plan.dots.firstOrNull()
         var x = first?.x ?: 0f
         var y = first?.y ?: 0f
-        var zoom = 1.9f
+        val citySpan = (plan.fit.world * 0.00062).toFloat()
+        var span = citySpan
         for (seg in plan.segments) {
             if (cursor < seg.departAt) break
             if (cursor >= seg.arriveAt) {
-                x = seg.endX; y = seg.endY; zoom = 1.9f
+                x = seg.endX; y = seg.endY; span = citySpan
             } else {
                 val linear = ((cursor - seg.departAt).toFloat() / (seg.arriveAt - seg.departAt)).coerceIn(0f, 1f)
                 val f = smoothStep(linear)
                 measure.setPath(seg.path, false)
                 measure.getPosTan(measure.length * f, pos, null)
                 x = pos[0]; y = pos[1]
-                val travelZoom = (780f / seg.length.coerceAtLeast(1f)).coerceIn(1.04f, 1.55f)
+                val transferSpan = travelSpan(plan, seg).coerceAtLeast(citySpan)
                 val zoomOut = sin(Math.PI.toFloat() * linear).let { it * it }
-                zoom = 1.9f + (travelZoom - 1.9f) * zoomOut
+                span = kotlin.math.exp(
+                    kotlin.math.ln(citySpan) +
+                        (kotlin.math.ln(transferSpan) - kotlin.math.ln(citySpan)) * zoomOut,
+                )
                 break
             }
         }
-        return Camera(x, y, zoom)
+        return Camera(x, y, span)
     }
 
     private fun distanceAt(plan: Plan, cursor: Long): Double {
@@ -380,6 +400,74 @@ object MapRenderer {
     }
 
     private fun smoothStep(v: Float): Float = v * v * (3f - 2f * v)
+
+    private fun travelSpan(plan: Plan, seg: Segment): Float {
+        val dx = kotlin.math.abs(seg.endX - pathStart(seg).first).coerceAtLeast(1f)
+        val dy = kotlin.math.abs(seg.endY - pathStart(seg).second).coerceAtLeast(1f)
+        val aspect = 1080f / 1920f
+        return maxOf(dy * 2.8f, dx * 2.8f / aspect, plan.fit.world.toFloat() * 0.00062f)
+            .coerceAtMost(plan.fit.world.toFloat() * 0.72f)
+    }
+
+    private fun pathStart(seg: Segment): Pair<Float, Float> {
+        measure.setPath(seg.path, false)
+        measure.getPosTan(0f, pos, null)
+        return pos[0] to pos[1]
+    }
+
+    private fun viewportAt(plan: Plan, spec: CardSpec, cursor: Long): DynamicViewport {
+        val camera = cameraAt(plan, cursor)
+        val world = plan.fit.world
+        val spanY = (camera.spanY / world).coerceIn(0.00030, 0.72)
+        val aspect = spec.ratio.w.toDouble() / spec.ratio.h
+        val spanX = spanY * aspect
+        val cx = (camera.x + plan.fit.ox) / world
+        val cy = (camera.y + plan.fit.oy) / world
+        val zoom = floor(log2(spec.ratio.w / (256.0 * spanX))).toInt().coerceIn(2, 15)
+        return DynamicViewport(
+            camera.x, camera.y, (spanY * world).toFloat(),
+            cx - spanX / 2, cx + spanX / 2, cy - spanY / 2, cy + spanY / 2, zoom,
+        )
+    }
+
+    private data class DynamicTile(val z: Int, val wrappedX: Int, val y: Int, val worldX: Int)
+
+    suspend fun prepareTiles(plan: Plan, spec: CardSpec, cursor: Long) = withContext(Dispatchers.IO) {
+        requiredTiles(viewportAt(plan, spec, cursor)).forEach { entry ->
+            tile(entry.z, entry.wrappedX, entry.y)
+        }
+    }
+
+    private fun requiredTiles(viewport: DynamicViewport): List<DynamicTile> {
+        val count = 1 shl viewport.tileZoom
+        val x0 = floor(viewport.minWorldX * count).toInt()
+        val x1 = floor(viewport.maxWorldX * count).toInt()
+        val y0 = floor(viewport.minWorldY * count).toInt().coerceIn(0, count - 1)
+        val y1 = floor(viewport.maxWorldY * count).toInt().coerceIn(0, count - 1)
+        return buildList {
+            for (x in x0..x1) for (y in y0..y1) {
+                add(DynamicTile(viewport.tileZoom, ((x % count) + count) % count, y, x))
+            }
+        }
+    }
+
+    private fun drawDynamicTiles(c: Canvas, viewport: DynamicViewport, w: Float, h: Float): Boolean {
+        val count = 1 shl viewport.tileZoom
+        val required = requiredTiles(viewport)
+        val bitmaps = required.map { tiles["${it.z}/${it.wrappedX}/${it.y}"] ?: return false }
+        required.zip(bitmaps).forEach { (entry, bmp) ->
+            val left = ((entry.worldX.toDouble() / count - viewport.minWorldX) /
+                (viewport.maxWorldX - viewport.minWorldX) * w).toFloat()
+            val right = (((entry.worldX + 1).toDouble() / count - viewport.minWorldX) /
+                (viewport.maxWorldX - viewport.minWorldX) * w).toFloat()
+            val top = ((entry.y.toDouble() / count - viewport.minWorldY) /
+                (viewport.maxWorldY - viewport.minWorldY) * h).toFloat()
+            val bottom = (((entry.y + 1).toDouble() / count - viewport.minWorldY) /
+                (viewport.maxWorldY - viewport.minWorldY) * h).toFloat()
+            c.drawBitmap(bmp, null, RectF(left, top, right + 1f, bottom + 1f), null)
+        }
+        return true
+    }
 
     private fun eastwardTransition(fromLon: Double, toLon: Double): Boolean {
         val europeToAsia = fromLon in -25.0..60.0 && toLon > 60.0

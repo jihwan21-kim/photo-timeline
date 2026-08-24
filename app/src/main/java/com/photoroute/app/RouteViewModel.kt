@@ -24,6 +24,8 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
 
     private val scanner = PhotoScanner(app)
     private var basemapJob: Job? = null
+    private var tilePrepareJob: Job? = null
+    private var lastTileBucket = -1
 
     // ---- scan state ----
     var scanning by mutableStateOf(false); private set
@@ -116,13 +118,21 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
         val p = plan ?: return
         if (p.segments.isEmpty()) return
         if (progressT >= 1f) progressT = 0f
-        playing = true
+        val start = cursorAt(progressT)
+        val ahead = cursorAt((progressT + 0.025f).coerceAtMost(1f))
+        tilePrepareJob?.cancel()
+        tilePrepareJob = viewModelScope.launch {
+            MapRenderer.prepareTiles(p, spec, start)
+            MapRenderer.prepareTiles(p, spec, ahead)
+            playing = true
+        }
     }
     fun pause() { playing = false }
     fun advance(deltaSec: Float) {
         val step = deltaSec * speed / durationSec
         val next = progressT + step
         if (next >= 1f) { progressT = 1f; playing = false } else progressT = next
+        prepareCameraTiles()
     }
 
     // ---- work ----
@@ -170,11 +180,27 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
         pacingWeight = pacingPhases.sumOf { it.weight }
         progressT = 1f
         playing = false
+        lastTileBucket = -1
 
         basemapJob?.cancel()
         basemapJob = viewModelScope.launch {
             basemap = null
             basemap = MapRenderer.basemap(fit, spec)
+            prepareCameraTiles(force = true)
+        }
+    }
+
+    private fun prepareCameraTiles(force: Boolean = false) {
+        val p = plan ?: return
+        val bucket = (progressT * 50).toInt()
+        if (!force && bucket == lastTileBucket) return
+        if (tilePrepareJob?.isActive == true) return
+        lastTileBucket = bucket
+        val current = cursorAt(progressT)
+        val ahead = cursorAt((progressT + 0.025f).coerceAtMost(1f))
+        tilePrepareJob = viewModelScope.launch {
+            MapRenderer.prepareTiles(p, spec, current)
+            MapRenderer.prepareTiles(p, spec, ahead)
         }
     }
 
