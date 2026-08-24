@@ -3,6 +3,7 @@ package com.photoroute.app
 import android.app.Application
 import android.content.ContentValues
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -23,6 +24,7 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     private data class PacingPhase(val from: Long, val to: Long, val weight: Double)
 
     private val scanner = PhotoScanner(app)
+    private val timelineExporter = TimelineJsonExporter(app)
     private var basemapJob: Job? = null
     private var tilePrepareJob: Job? = null
     private var lastTileBucket = -1
@@ -31,6 +33,11 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     var scanning by mutableStateOf(false); private set
     var progress by mutableStateOf(0f); private set
     var status by mutableStateOf(""); private set
+    var preparingTimeline by mutableStateOf(false); private set
+    var timelineStatus by mutableStateOf(""); private set
+    var timelineReadyToSave by mutableStateOf(false); private set
+    private var preparedTimelineJson: String? = null
+    private var preparedTimelinePoints = 0
 
     // ---- filters ----
     var source by mutableStateOf(Source.CAMERA); private set
@@ -196,6 +203,83 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
             basemap = MapRenderer.basemap(fit, spec)
             prepareCameraTiles(force = true)
         }
+    }
+
+    fun prepareTimelineJson(photoUris: List<Uri>) {
+        if (preparingTimeline || photoUris.isEmpty()) return
+        preparingTimeline = true
+        timelineReadyToSave = false
+        preparedTimelineJson = null
+        preparedTimelinePoints = 0
+        timelineStatus = "선택한 사진에서 GPS와 촬영시간을 읽는 중…"
+
+        viewModelScope.launch {
+            val prepared = runCatching { timelineExporter.prepare(photoUris) }.getOrNull()
+            preparingTimeline = false
+            if (prepared == null) {
+                timelineStatus = "사진을 읽지 못했어. 원본 사진을 다시 선택해줘."
+                return@launch
+            }
+
+            val skipped = buildList {
+                if (prepared.skippedNoLocation > 0) add("위치 없음 ${prepared.skippedNoLocation}장")
+                if (prepared.skippedNoTime > 0) add("시간 없음 ${prepared.skippedNoTime}장")
+                if (prepared.skippedUnreadable > 0) add("읽기 실패 ${prepared.skippedUnreadable}장")
+                if (prepared.removedDuplicates > 0) add("중복 ${prepared.removedDuplicates}개")
+            }
+            if (prepared.json == null) {
+                timelineStatus = buildString {
+                    append("내보낼 위치가 없어. GPS가 저장된 원본 사진을 선택해줘.")
+                    if (skipped.isNotEmpty()) append(" (").append(skipped.joinToString(" · ")).append(')')
+                }
+                return@launch
+            }
+
+            preparedTimelineJson = prepared.json
+            preparedTimelinePoints = prepared.exported
+            timelineStatus = buildString {
+                append("선택 ${prepared.selected}장 · 타임라인 지점 ${prepared.exported}개 준비")
+                if (skipped.isNotEmpty()) append(" · ").append(skipped.joinToString(" · "))
+                if (prepared.exported == 1) append(" · 동선 재생은 지점 2개 이상 필요")
+            }
+            timelineReadyToSave = true
+        }
+    }
+
+    fun consumeTimelineSaveRequest() {
+        timelineReadyToSave = false
+    }
+
+    fun savePreparedTimeline(destination: Uri) {
+        val json = preparedTimelineJson ?: run {
+            timelineStatus = "준비된 Timeline.json이 없어. 사진을 다시 선택해줘."
+            return
+        }
+        preparingTimeline = true
+        timelineStatus = "Timeline.json 저장 중…"
+        viewModelScope.launch {
+            val pointCount = preparedTimelinePoints
+            val ok = timelineExporter.write(destination, json)
+            preparingTimeline = false
+            timelineStatus = if (ok) {
+                "Timeline.json 저장 완료 · ${pointCount}개 지점"
+            } else {
+                "Timeline.json 저장에 실패했어."
+            }
+            preparedTimelineJson = null
+            preparedTimelinePoints = 0
+        }
+    }
+
+    fun cancelTimelineSave() {
+        timelineReadyToSave = false
+        preparedTimelineJson = null
+        preparedTimelinePoints = 0
+        timelineStatus = "Timeline.json 저장을 취소했어."
+    }
+
+    fun timelineLocationPermissionDenied() {
+        timelineStatus = "사진의 GPS를 읽으려면 '미디어 위치' 권한을 허용해줘."
     }
 
     private fun prepareCameraTiles(force: Boolean = false) {

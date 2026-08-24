@@ -46,6 +46,7 @@ CLI만 쓸 거면 `gradle wrapper --gradle-version 8.9` 한 번 실행하면 된
 | 파일 | 하는 일 |
 |---|---|
 | `PhotoScanner.kt` | MediaStore 쿼리 + ExifInterface로 좌표·촬영시각 추출 |
+| `TimelineJsonExporter.kt` | 고른 사진의 EXIF를 Google Timeline 호환 JSON으로 변환 |
 | `Geo.kt` | haversine, 웹 메르카토르, 순차 클러스터링 |
 | `MapRenderer.kt` | CARTO 타일 fetch + Canvas 렌더링 + PNG |
 | `RouteViewModel.kt` | 스캔/재계산/저장 상태 |
@@ -76,6 +77,16 @@ Android 14+에서 사용자가 "전체 허용" 대신 "선택한 사진만" 을 
 배포용으로 트래픽이 커질 것 같으면 자체 타일 서버나 유료 플랜을 쓰는 게 맞다.
 
 ## 이번 버전에서 추가된 것
+
+### Timeline.json 내보내기
+
+앱 상단의 `사진 골라 Timeline.json 만들기`에서 원본 사진을 여러 장 고르면,
+GPS와 촬영시간이 있는 사진만 시간순으로 정렬해 `Timeline.json`으로 저장한다.
+좌표가 없는 사진과 정확히 중복된 지점은 자동으로 제외된다. 사진 자체는 JSON에 포함되지 않는다.
+
+출력은 `semanticSegments[].timelinePath[]` 형식이며
+[`google-timeline-visualizer` v2.4.1](https://github.com/mahlernim/google-timeline-visualizer/releases/tag/v2.4.1)의
+실제 `TimelineParser`가 읽는 스키마에 맞춰져 있다.
 
 ### 1. 내가 찍은 사진만
 `사진 출처` 3단 선택:
