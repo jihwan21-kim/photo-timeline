@@ -90,8 +90,8 @@ fun Screen(vm: RouteViewModel = viewModel()) {
     val requestTimelineLocation = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { allowed ->
-        if (allowed) pickTimelinePhotos.launch(arrayOf("image/*"))
-        else vm.timelineLocationPermissionDenied()
+        if (!allowed) vm.timelineLocationPermissionDenied()
+        pickTimelinePhotos.launch(arrayOf("image/*"))
     }
 
     val ask = rememberLauncherForActivityResult(
@@ -106,7 +106,8 @@ fun Screen(vm: RouteViewModel = viewModel()) {
     LaunchedEffect(vm.timelineReadyToSave) {
         if (vm.timelineReadyToSave) {
             vm.consumeTimelineSaveRequest()
-            saveTimelineDocument.launch("Timeline.json")
+            runCatching { saveTimelineDocument.launch("Timeline.json") }
+                .onFailure { vm.timelineSaveLaunchFailed() }
         }
     }
 
@@ -165,6 +166,14 @@ fun Screen(vm: RouteViewModel = viewModel()) {
                 if (vm.preparingTimeline) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Accent)
                 if (vm.timelineStatus.isNotBlank()) {
                     Text(vm.timelineStatus, color = Graphite, fontSize = 11.sp)
+                }
+                if (vm.timelineCanSave && !vm.timelineReadyToSave && !vm.preparingTimeline) {
+                    OutlinedButton(
+                        onClick = { vm.requestTimelineSave() },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("저장 위치 다시 고르기")
+                    }
                 }
             }
         }

@@ -18,6 +18,7 @@ internal data class TimelinePoint(
     val latitude: Double,
     val longitude: Double,
     val timeMillis: Long,
+    val timeZoneEstimated: Boolean = false,
 )
 
 internal data class PreparedTimelineJson(
@@ -28,6 +29,7 @@ internal data class PreparedTimelineJson(
     val skippedNoTime: Int,
     val skippedUnreadable: Int,
     val removedDuplicates: Int,
+    val estimatedTimeZones: Int,
 )
 
 /**
@@ -42,6 +44,8 @@ internal class TimelineJsonExporter(private val context: Context) {
         data object NoTime : ReadResult
         data object Unreadable : ReadResult
     }
+
+    private data class ResolvedTime(val millis: Long, val estimatedTimeZone: Boolean)
 
     suspend fun prepare(photoUris: List<Uri>): PreparedTimelineJson = withContext(Dispatchers.IO) {
         val uniqueUris = photoUris.distinct()
@@ -68,6 +72,7 @@ internal class TimelineJsonExporter(private val context: Context) {
             skippedNoTime = noTime,
             skippedUnreadable = unreadable,
             removedDuplicates = points.size - normalized.size,
+            estimatedTimeZones = normalized.count(TimelinePoint::timeZoneEstimated),
         )
     }
 
@@ -103,7 +108,14 @@ internal class TimelineJsonExporter(private val context: Context) {
 
                     val time = exifTime(exif, mediaCaptureTime)
                         ?: return@use ReadResult.NoTime
-                    ReadResult.Point(TimelinePoint(latitude, longitude, time))
+                    ReadResult.Point(
+                        TimelinePoint(
+                            latitude,
+                            longitude,
+                            time.millis,
+                            time.estimatedTimeZone,
+                        )
+                    )
                 } ?: ReadResult.Unreadable
             }.getOrDefault(ReadResult.Unreadable)
 
@@ -115,7 +127,7 @@ internal class TimelineJsonExporter(private val context: Context) {
         return bestResult
     }
 
-    private fun exifTime(exif: ExifInterface, mediaCaptureTime: Long?): Long? {
+    private fun exifTime(exif: ExifInterface, mediaCaptureTime: Long?): ResolvedTime? {
         val original = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
         val originalSubseconds = exif.getAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL)
         val originalOffset = exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL)
@@ -124,8 +136,10 @@ internal class TimelineJsonExporter(private val context: Context) {
         // already UTC and is the next safest source when older cameras omit the offset tag.
         parseExifDateTime(original, originalSubseconds, originalOffset, assumeLocalZone = false)
             ?.let { return it }
-        runCatching { exif.gpsDateTime }.getOrNull()?.takeIf { it > 0L }?.let { return it }
-        mediaCaptureTime?.takeIf { it > 0L }?.let { return it }
+        runCatching { exif.gpsDateTime }.getOrNull()?.takeIf { it > 0L }
+            ?.let { return ResolvedTime(it, estimatedTimeZone = false) }
+        mediaCaptureTime?.takeIf { it > 0L }
+            ?.let { return ResolvedTime(it, estimatedTimeZone = true) }
         parseExifDateTime(original, originalSubseconds, originalOffset, assumeLocalZone = true)
             ?.let { return it }
 
@@ -148,7 +162,7 @@ internal class TimelineJsonExporter(private val context: Context) {
         rawSubseconds: String?,
         rawOffset: String?,
         assumeLocalZone: Boolean,
-    ): Long? {
+    ): ResolvedTime? {
         if (raw.isNullOrBlank()) return null
         val local = EXIF_DATE_FORMATS.firstNotNullOfOrNull { formatter ->
             runCatching { LocalDateTime.parse(raw.trim(), formatter) }.getOrNull()
@@ -159,9 +173,17 @@ internal class TimelineJsonExporter(private val context: Context) {
         val offset = rawOffset?.trim()?.takeIf { it.isNotEmpty() }?.let {
             runCatching { ZoneOffset.of(it) }.getOrNull()
         }
-        if (offset != null) return withSubseconds.toInstant(offset).toEpochMilli()
+        if (offset != null) {
+            return ResolvedTime(
+                withSubseconds.toInstant(offset).toEpochMilli(),
+                estimatedTimeZone = false,
+            )
+        }
         if (!assumeLocalZone) return null
-        return withSubseconds.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        return ResolvedTime(
+            withSubseconds.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+            estimatedTimeZone = true,
+        )
     }
 
     private fun candidateUris(uri: Uri): List<Uri> {

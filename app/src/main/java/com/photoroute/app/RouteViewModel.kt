@@ -36,8 +36,10 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     var preparingTimeline by mutableStateOf(false); private set
     var timelineStatus by mutableStateOf(""); private set
     var timelineReadyToSave by mutableStateOf(false); private set
+    var timelineCanSave by mutableStateOf(false); private set
     private var preparedTimelineJson: String? = null
     private var preparedTimelinePoints = 0
+    private var preparedEstimatedTimeZones = 0
 
     // ---- filters ----
     var source by mutableStateOf(Source.CAMERA); private set
@@ -209,8 +211,10 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
         if (preparingTimeline || photoUris.isEmpty()) return
         preparingTimeline = true
         timelineReadyToSave = false
+        timelineCanSave = false
         preparedTimelineJson = null
         preparedTimelinePoints = 0
+        preparedEstimatedTimeZones = 0
         timelineStatus = "선택한 사진에서 GPS와 촬영시간을 읽는 중…"
 
         viewModelScope.launch {
@@ -226,6 +230,7 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
                 if (prepared.skippedNoTime > 0) add("시간 없음 ${prepared.skippedNoTime}장")
                 if (prepared.skippedUnreadable > 0) add("읽기 실패 ${prepared.skippedUnreadable}장")
                 if (prepared.removedDuplicates > 0) add("중복 ${prepared.removedDuplicates}개")
+                if (prepared.estimatedTimeZones > 0) add("시간대 추정 ${prepared.estimatedTimeZones}장")
             }
             if (prepared.json == null) {
                 timelineStatus = buildString {
@@ -237,6 +242,8 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
 
             preparedTimelineJson = prepared.json
             preparedTimelinePoints = prepared.exported
+            preparedEstimatedTimeZones = prepared.estimatedTimeZones
+            timelineCanSave = true
             timelineStatus = buildString {
                 append("선택 ${prepared.selected}장 · 타임라인 지점 ${prepared.exported}개 준비")
                 if (skipped.isNotEmpty()) append(" · ").append(skipped.joinToString(" · "))
@@ -250,6 +257,10 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
         timelineReadyToSave = false
     }
 
+    fun requestTimelineSave() {
+        if (preparedTimelineJson != null) timelineReadyToSave = true
+    }
+
     fun savePreparedTimeline(destination: Uri) {
         val json = preparedTimelineJson ?: run {
             timelineStatus = "준비된 Timeline.json이 없어. 사진을 다시 선택해줘."
@@ -259,27 +270,41 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
         timelineStatus = "Timeline.json 저장 중…"
         viewModelScope.launch {
             val pointCount = preparedTimelinePoints
+            val estimatedTimeZones = preparedEstimatedTimeZones
             val ok = timelineExporter.write(destination, json)
             preparingTimeline = false
             timelineStatus = if (ok) {
-                "Timeline.json 저장 완료 · ${pointCount}개 지점"
+                buildString {
+                    append("Timeline.json 저장 완료 · ${pointCount}개 지점")
+                    if (estimatedTimeZones > 0) append(" · 시간대 추정 ${estimatedTimeZones}장")
+                }
             } else {
-                "Timeline.json 저장에 실패했어."
+                "Timeline.json 저장에 실패했어. 저장 위치를 다시 골라줘."
             }
-            preparedTimelineJson = null
-            preparedTimelinePoints = 0
+            if (ok) clearPreparedTimeline()
         }
     }
 
     fun cancelTimelineSave() {
         timelineReadyToSave = false
+        timelineStatus = "Timeline.json 저장을 취소했어. 아래에서 저장 위치만 다시 골라면 돼."
+    }
+
+    fun timelineSaveLaunchFailed() {
+        timelineReadyToSave = false
+        timelineStatus = "저장 창을 열지 못했어. 저장 위치를 다시 골라줘."
+    }
+
+    private fun clearPreparedTimeline() {
+        timelineReadyToSave = false
+        timelineCanSave = false
         preparedTimelineJson = null
         preparedTimelinePoints = 0
-        timelineStatus = "Timeline.json 저장을 취소했어."
+        preparedEstimatedTimeZones = 0
     }
 
     fun timelineLocationPermissionDenied() {
-        timelineStatus = "사진의 GPS를 읽으려면 '미디어 위치' 권한을 허용해줘."
+        timelineStatus = "권한 없이 계속할게. 로컬 사진의 GPS는 제외될 수 있어."
     }
 
     private fun prepareCameraTiles(force: Boolean = false) {
