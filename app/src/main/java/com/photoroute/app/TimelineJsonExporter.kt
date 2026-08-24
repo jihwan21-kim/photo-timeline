@@ -36,8 +36,6 @@ internal data class PreparedTimelineJson(
  */
 internal class TimelineJsonExporter(private val context: Context) {
 
-    private data class MediaTimes(val captured: Long?, val fileTime: Long?)
-
     private sealed interface ReadResult {
         data class Point(val value: TimelinePoint) : ReadResult
         data object NoLocation : ReadResult
@@ -83,7 +81,7 @@ internal class TimelineJsonExporter(private val context: Context) {
     }
 
     private fun readPhoto(uri: Uri): ReadResult {
-        val mediaTimes = queryMediaTimes(uri)
+        val mediaCaptureTime = queryMediaCaptureTime(uri)
         var bestResult: ReadResult = ReadResult.Unreadable
 
         candidateUris(uri).forEach { candidate ->
@@ -103,7 +101,7 @@ internal class TimelineJsonExporter(private val context: Context) {
                         return@use ReadResult.NoLocation
                     }
 
-                    val time = exifTime(exif, mediaTimes.captured) ?: mediaTimes.fileTime
+                    val time = exifTime(exif, mediaCaptureTime)
                         ?: return@use ReadResult.NoTime
                     ReadResult.Point(TimelinePoint(latitude, longitude, time))
                 } ?: ReadResult.Unreadable
@@ -168,34 +166,39 @@ internal class TimelineJsonExporter(private val context: Context) {
 
     private fun candidateUris(uri: Uri): List<Uri> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return listOf(uri)
-        val original = runCatching { MediaStore.setRequireOriginal(uri) }.getOrDefault(uri)
-        return if (original == uri) listOf(uri) else listOf(original, uri)
+        val mediaUri = equivalentMediaUri(uri)
+        val base = mediaUri ?: uri
+        val original = runCatching { MediaStore.setRequireOriginal(base) }.getOrDefault(base)
+        return listOf(original, base, uri).distinct()
     }
 
-    private fun queryMediaTimes(uri: Uri): MediaTimes = runCatching {
-        context.contentResolver.query(
-            uri,
-            arrayOf(
-                MediaStore.Images.Media.DATE_TAKEN,
-                MediaStore.Images.Media.DATE_ADDED,
-                MediaStore.Images.Media.DATE_MODIFIED,
-            ),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (!cursor.moveToFirst()) return@use MediaTimes(null, null)
-            fun value(column: String): Long? {
-                val index = cursor.getColumnIndex(column)
-                return if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index) else null
-            }
-            MediaTimes(
-                captured = value(MediaStore.Images.Media.DATE_TAKEN)?.takeIf { it > 0L },
-                fileTime = value(MediaStore.Images.Media.DATE_ADDED)?.takeIf { it > 0L }?.times(1_000L)
-                    ?: value(MediaStore.Images.Media.DATE_MODIFIED)?.takeIf { it > 0L }?.times(1_000L),
-            )
+    private fun equivalentMediaUri(uri: Uri): Uri? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        return runCatching { MediaStore.getMediaUri(context, uri) }.getOrNull()
+    }
+
+    private fun queryMediaCaptureTime(uri: Uri): Long? {
+        val candidates = listOfNotNull(equivalentMediaUri(uri), uri).distinct()
+        return candidates.firstNotNullOfOrNull { candidate ->
+            runCatching {
+                context.contentResolver.query(
+                    candidate,
+                    arrayOf(MediaStore.Images.Media.DATE_TAKEN),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    if (!cursor.moveToFirst()) return@use null
+                    val index = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+                    if (index >= 0 && !cursor.isNull(index)) {
+                        cursor.getLong(index).takeIf { it > 0L }
+                    } else {
+                        null
+                    }
+                }
+            }.getOrNull()
         }
-    }.getOrNull() ?: MediaTimes(null, null)
+    }
 
     private companion object {
         const val MIN_LATITUDE = -85.05112878
