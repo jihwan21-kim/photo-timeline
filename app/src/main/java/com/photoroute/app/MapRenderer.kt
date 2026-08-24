@@ -353,8 +353,8 @@ object MapRenderer {
         drawAttribution(c, spec.ratio.w, spec.ratio.h)
     }
 
-    private data class Camera(val x: Float, val y: Float, val spanY: Float)
-    private data class DynamicViewport(
+    internal data class Camera(val x: Float, val y: Float, val spanY: Float)
+    internal data class DynamicViewport(
         val centerX: Float,
         val centerY: Float,
         val spanYPixels: Float,
@@ -365,7 +365,7 @@ object MapRenderer {
         val tileZoom: Int,
     )
 
-    private fun cameraAt(plan: Plan, spec: CardSpec, cursor: Long): Camera {
+    internal fun cameraAt(plan: Plan, spec: CardSpec, cursor: Long): Camera {
         val cameraMeasure = PathMeasure()
         val cameraPosition = FloatArray(2)
         val first = plan.dots.firstOrNull()
@@ -422,7 +422,7 @@ object MapRenderer {
             .coerceAtMost(plan.fit.world.toFloat() * 0.72f)
     }
 
-    private fun viewportAt(plan: Plan, spec: CardSpec, cursor: Long): DynamicViewport {
+    internal fun viewportAt(plan: Plan, spec: CardSpec, cursor: Long): DynamicViewport {
         val camera = cameraAt(plan, spec, cursor)
         val world = plan.fit.world
         val spanY = (camera.spanY / world).coerceIn(0.00030, 0.72)
@@ -437,7 +437,7 @@ object MapRenderer {
         )
     }
 
-    private data class DynamicTile(val z: Int, val wrappedX: Int, val y: Int, val worldX: Int)
+    internal data class DynamicTile(val z: Int, val wrappedX: Int, val y: Int, val worldX: Int)
 
     suspend fun prepareTiles(plan: Plan, spec: CardSpec, cursor: Long) = coroutineScope {
         requiredTiles(viewportAt(plan, spec, cursor)).distinctBy { Triple(it.z, it.wrappedX, it.y) }
@@ -446,7 +446,7 @@ object MapRenderer {
         Unit
     }
 
-    private fun requiredTiles(viewport: DynamicViewport): List<DynamicTile> {
+    internal fun requiredTiles(viewport: DynamicViewport): List<DynamicTile> {
         val count = 1 shl viewport.tileZoom
         val x0 = floor(viewport.minWorldX * count).toInt()
         val x1 = floor(viewport.maxWorldX * count).toInt()

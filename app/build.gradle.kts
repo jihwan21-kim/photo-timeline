@@ -28,6 +28,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    testOptions { unitTests.isIncludeAndroidResources = true }
 }
 
 dependencies {
@@ -43,4 +44,6 @@ dependencies {
     implementation(libs.exifinterface)
     debugImplementation(libs.compose.tooling)
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
 }
