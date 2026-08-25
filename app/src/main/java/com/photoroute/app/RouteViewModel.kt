@@ -37,9 +37,12 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     var timelineStatus by mutableStateOf(""); private set
     var timelineReadyToSave by mutableStateOf(false); private set
     var timelineCanSave by mutableStateOf(false); private set
+    var timelineFromMillis by mutableStateOf(monthsAgo(3)); private set
+    var timelineToExclusiveMillis by mutableStateOf(startOfTomorrow()); private set
     private var preparedTimelineJson: String? = null
     private var preparedTimelinePoints = 0
     private var preparedEstimatedTimeZones = 0
+    private var preparedFromLimitedAccess = false
 
     // ---- filters ----
     var source by mutableStateOf(Source.CAMERA); private set
@@ -114,6 +117,11 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     // ---- setters ----
     fun updateSource(s: Source) { source = s }
     fun setRange(from: Long, to: Long) { fromMillis = from; toMillis = to }
+    fun setTimelineRange(fromInclusive: Long, toExclusive: Long) {
+        require(fromInclusive < toExclusive)
+        timelineFromMillis = fromInclusive
+        timelineToExclusiveMillis = toExclusive
+    }
     fun toggleBucket(id: Long) {
         selectedBuckets = if (id in selectedBuckets) selectedBuckets - id else selectedBuckets + id
     }
@@ -208,17 +216,44 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun prepareTimelineJson(photoUris: List<Uri>) {
-        if (preparingTimeline || photoUris.isEmpty()) return
+        if (photoUris.isEmpty()) return
+        startTimelinePreparation(
+            workingStatus = "선택한 사진에서 GPS와 촬영시간을 읽는 중…",
+            emptyStatus = "내보낼 위치가 없어. GPS가 저장된 원본 사진을 선택해줘.",
+            countLabel = "선택",
+        ) {
+            timelineExporter.prepare(photoUris)
+        }
+    }
+
+    fun prepareTimelineJsonForRange(limitedAccess: Boolean) {
+        val from = timelineFromMillis
+        val toExclusive = timelineToExclusiveMillis
+        startTimelinePreparation(
+            workingStatus = "선택한 기간의 사진을 찾고 GPS를 읽는 중…",
+            emptyStatus = "이 기간에 GPS와 촬영시간이 있는 사진이 없어.",
+            countLabel = "기간 후보",
+            limitedAccess = limitedAccess,
+        ) {
+            val uris = scanner.timelineUris(from, toExclusive)
+            timelineExporter.prepare(uris, from, toExclusive)
+        }
+    }
+
+    private fun startTimelinePreparation(
+        workingStatus: String,
+        emptyStatus: String,
+        countLabel: String,
+        limitedAccess: Boolean = false,
+        prepare: suspend () -> PreparedTimelineJson,
+    ) {
+        if (preparingTimeline) return
         preparingTimeline = true
-        timelineReadyToSave = false
-        timelineCanSave = false
-        preparedTimelineJson = null
-        preparedTimelinePoints = 0
-        preparedEstimatedTimeZones = 0
-        timelineStatus = "선택한 사진에서 GPS와 촬영시간을 읽는 중…"
+        clearPreparedTimeline()
+        timelineStatus = workingStatus
 
         viewModelScope.launch {
-            val prepared = runCatching { timelineExporter.prepare(photoUris) }.getOrNull()
+            val prepared = runCatching { prepare() }.getOrNull()
             preparingTimeline = false
             if (prepared == null) {
                 timelineStatus = "사진을 읽지 못했어. 원본 사진을 다시 선택해줘."
@@ -231,10 +266,12 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
                 if (prepared.skippedUnreadable > 0) add("읽기 실패 ${prepared.skippedUnreadable}장")
                 if (prepared.removedDuplicates > 0) add("중복 ${prepared.removedDuplicates}개")
                 if (prepared.estimatedTimeZones > 0) add("시간대 추정 ${prepared.estimatedTimeZones}장")
+                if (prepared.skippedOutsideRange > 0) add("기간 밖 ${prepared.skippedOutsideRange}장")
+                if (limitedAccess) add("허용된 사진만 확인")
             }
             if (prepared.json == null) {
                 timelineStatus = buildString {
-                    append("내보낼 위치가 없어. GPS가 저장된 원본 사진을 선택해줘.")
+                    append(emptyStatus)
                     if (skipped.isNotEmpty()) append(" (").append(skipped.joinToString(" · ")).append(')')
                 }
                 return@launch
@@ -243,9 +280,10 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
             preparedTimelineJson = prepared.json
             preparedTimelinePoints = prepared.exported
             preparedEstimatedTimeZones = prepared.estimatedTimeZones
+            preparedFromLimitedAccess = limitedAccess
             timelineCanSave = true
             timelineStatus = buildString {
-                append("선택 ${prepared.selected}장 · 타임라인 지점 ${prepared.exported}개 준비")
+                append("$countLabel ${prepared.selected}장 · 타임라인 지점 ${prepared.exported}개 준비")
                 if (skipped.isNotEmpty()) append(" · ").append(skipped.joinToString(" · "))
                 if (prepared.exported == 1) append(" · 동선 재생은 지점 2개 이상 필요")
             }
@@ -271,12 +309,14 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val pointCount = preparedTimelinePoints
             val estimatedTimeZones = preparedEstimatedTimeZones
+            val limitedAccess = preparedFromLimitedAccess
             val ok = timelineExporter.write(destination, json)
             preparingTimeline = false
             timelineStatus = if (ok) {
                 buildString {
                     append("Timeline.json 저장 완료 · ${pointCount}개 지점")
                     if (estimatedTimeZones > 0) append(" · 시간대 추정 ${estimatedTimeZones}장")
+                    if (limitedAccess) append(" · 허용된 사진만 포함")
                 }
             } else {
                 "Timeline.json 저장에 실패했어. 저장 위치를 다시 골라줘."
@@ -301,10 +341,15 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
         preparedTimelineJson = null
         preparedTimelinePoints = 0
         preparedEstimatedTimeZones = 0
+        preparedFromLimitedAccess = false
     }
 
     fun timelineLocationPermissionDenied() {
         timelineStatus = "권한 없이 계속할게. 로컬 사진의 GPS는 제외될 수 있어."
+    }
+
+    fun timelineRangePermissionDenied() {
+        timelineStatus = "기간 자동 선택에는 사진 접근과 '미디어 위치' 허용이 필요해. 사진은 전체 허용을 권장해."
     }
 
     private fun prepareCameraTiles(force: Boolean = false) {
@@ -415,6 +460,12 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
         fun endOfToday(): Long = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 23); set(Calendar.MINUTE, 59)
             set(Calendar.SECOND, 59); set(Calendar.MILLISECOND, 999)
+        }.timeInMillis
+
+        fun startOfTomorrow(): Long = Calendar.getInstance().apply {
+            add(Calendar.DAY_OF_MONTH, 1)
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
         }.timeInMillis
     }
 }

@@ -79,6 +79,17 @@ class TimelineJsonExporterTest {
         assertTrue(normalized.any { it.latitude == 38.5 })
     }
 
+    @Test
+    fun timelineRangeIncludesStartAndExcludesNextDayStart() {
+        val start = Instant.parse("2026-03-08T05:00:00Z").toEpochMilli()
+        val nextDayStart = Instant.parse("2026-03-09T04:00:00Z").toEpochMilli()
+
+        assertTrue(isInTimelineRange(start, start, nextDayStart))
+        assertTrue(isInTimelineRange(nextDayStart - 1L, start, nextDayStart))
+        assertFalse(isInTimelineRange(start - 1L, start, nextDayStart))
+        assertFalse(isInTimelineRange(nextDayStart, start, nextDayStart))
+    }
+
     private fun point(instant: String, latitude: Double, longitude: Double) = TimelinePoint(
         latitude = latitude,
         longitude = longitude,

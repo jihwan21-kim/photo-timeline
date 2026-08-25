@@ -1,6 +1,7 @@
 package com.photoroute.app
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -54,23 +55,51 @@ class MainActivity : ComponentActivity() {
 }
 
 private fun neededPermissions(): Array<String> = buildList {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         add(Manifest.permission.READ_MEDIA_IMAGES)
-    else
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+        }
+    } else {
         add(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
         add(Manifest.permission.ACCESS_MEDIA_LOCATION)
 }.toTypedArray()
+
+private fun hasPermission(context: Context, permission: String): Boolean =
+    ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+private fun hasReadablePhotoAccess(context: Context): Boolean = when {
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE ->
+        hasPermission(context, Manifest.permission.READ_MEDIA_IMAGES) ||
+            hasPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+        hasPermission(context, Manifest.permission.READ_MEDIA_IMAGES)
+    else -> hasPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE)
+}
+
+private fun hasMediaLocationAccess(context: Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+        hasPermission(context, Manifest.permission.ACCESS_MEDIA_LOCATION)
+
+private fun hasPhotoPermissions(context: Context): Boolean =
+    hasReadablePhotoAccess(context) && hasMediaLocationAccess(context)
+
+private fun hasFullLibraryAccess(context: Context): Boolean = when {
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+        hasPermission(context, Manifest.permission.READ_MEDIA_IMAGES)
+    else -> hasPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE)
+}
 
 @Composable
 fun Screen(vm: RouteViewModel = viewModel()) {
     val context = LocalContext.current
     var granted by remember {
-        mutableStateOf(neededPermissions().all {
-            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
-        })
+        mutableStateOf(hasPhotoPermissions(context))
     }
     var showDates by remember { mutableStateOf(false) }
+    var showTimelineDates by remember { mutableStateOf(false) }
     var showFolders by remember { mutableStateOf(false) }
     var showStops by remember { mutableStateOf(false) }
 
@@ -94,10 +123,21 @@ fun Screen(vm: RouteViewModel = viewModel()) {
         pickTimelinePhotos.launch(arrayOf("image/*"))
     }
 
+    val requestTimelineRangePermissions = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        granted = hasPhotoPermissions(context)
+        if (granted) {
+            vm.prepareTimelineJsonForRange(limitedAccess = !hasFullLibraryAccess(context))
+        } else {
+            vm.timelineRangePermissionDenied()
+        }
+    }
+
     val ask = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { res ->
-        granted = res.values.all { it }
+    ) {
+        granted = hasPhotoPermissions(context)
         if (granted) { vm.loadBuckets(); vm.scan() }
     }
 
@@ -139,19 +179,40 @@ fun Screen(vm: RouteViewModel = viewModel()) {
                 Label("GOOGLE TIMELINE VISUALIZER")
                 Text("Timeline.json 만들기", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    "고른 원본 사진의 GPS와 촬영시간만 추출해. 사진 파일 자체는 JSON에 들어가지 않아.",
+                    "기간을 정하면 아래 출처·폴더 설정과 무관하게, 기기에서 접근 가능한 사진 전체를 훑어. GPS와 촬영시간만 JSON에 들어가.",
                     color = Graphite,
                     fontSize = 11.5.sp,
                 )
+                Label("기간 자동 선택")
+                OutlinedButton(
+                    onClick = { showTimelineDates = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !vm.preparingTimeline,
+                ) {
+                    Text(
+                        "${MapRenderer.day(vm.timelineFromMillis)}  –  " +
+                            MapRenderer.day(vm.timelineToExclusiveMillis - 1L),
+                        fontSize = 13.sp,
+                    )
+                }
                 Button(
                     onClick = {
-                        if (
-                            Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
-                            ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.ACCESS_MEDIA_LOCATION,
-                            ) == PackageManager.PERMISSION_GRANTED
-                        ) {
+                        if (hasFullLibraryAccess(context) && hasMediaLocationAccess(context)) {
+                            vm.prepareTimelineJsonForRange(limitedAccess = false)
+                        } else {
+                            requestTimelineRangePermissions.launch(neededPermissions())
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !vm.preparingTimeline,
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                ) {
+                    Text(if (vm.preparingTimeline) "위치정보 읽는 중…" else "이 기간 전체로 Timeline.json 만들기")
+                }
+                Text("또는 사진을 직접 고르기", color = Graphite, fontSize = 11.sp)
+                OutlinedButton(
+                    onClick = {
+                        if (hasMediaLocationAccess(context)) {
                             pickTimelinePhotos.launch(arrayOf("image/*"))
                         } else {
                             requestTimelineLocation.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
@@ -159,9 +220,8 @@ fun Screen(vm: RouteViewModel = viewModel()) {
                     },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !vm.preparingTimeline,
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
                 ) {
-                    Text(if (vm.preparingTimeline) "위치정보 읽는 중…" else "사진 골라 Timeline.json 만들기")
+                    Text("사진 직접 골라 만들기")
                 }
                 if (vm.preparingTimeline) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Accent)
                 if (vm.timelineStatus.isNotBlank()) {
@@ -327,6 +387,7 @@ fun Screen(vm: RouteViewModel = viewModel()) {
     }
 
     if (showDates) DateRangeDialog(vm) { showDates = false }
+    if (showTimelineDates) TimelineDateRangeDialog(vm) { showTimelineDates = false }
     if (showStops) StopEditorDialog(vm) { showStops = false }
 }
 
@@ -466,6 +527,34 @@ private fun DateRangeDialog(vm: RouteViewModel, onClose: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TimelineDateRangeDialog(vm: RouteViewModel, onClose: () -> Unit) {
+    val state = rememberDateRangePickerState(
+        initialSelectedStartDateMillis = localToUtcDay(vm.timelineFromMillis),
+        initialSelectedEndDateMillis = localToUtcDay(vm.timelineToExclusiveMillis - 1L),
+    )
+    DatePickerDialog(
+        onDismissRequest = onClose,
+        confirmButton = {
+            TextButton({
+                val start = state.selectedStartDateMillis
+                val end = state.selectedEndDateMillis
+                if (start != null && end != null) {
+                    vm.setTimelineRange(
+                        utcDayToLocalStart(start),
+                        utcDayToLocalNextStart(end),
+                    )
+                }
+                onClose()
+            }) { Text("기간 적용") }
+        },
+        dismissButton = { TextButton(onClose) { Text("취소") } },
+    ) {
+        DateRangePicker(state, Modifier.weight(1f), title = null)
+    }
+}
+
 private fun localToUtcDay(local: Long): Long {
     val c = Calendar.getInstance().apply { timeInMillis = local }
     val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
@@ -487,8 +576,12 @@ private fun utcDay(millis: Long, endOfDay: Boolean): Long {
     }.timeInMillis
 }
 
-private fun utcDayToLocalStart(m: Long) = utcDay(m, false)
+internal fun utcDayToLocalStart(m: Long) = utcDay(m, false)
 private fun utcDayToLocalEnd(m: Long) = utcDay(m, true)
+internal fun utcDayToLocalNextStart(m: Long): Long = Calendar.getInstance().apply {
+    timeInMillis = utcDayToLocalStart(m)
+    add(Calendar.DAY_OF_MONTH, 1)
+}.timeInMillis
 
 @Composable private fun Label(t: String) =
     Text(t, color = Graphite, fontSize = 11.sp, fontFamily = FontFamily.Monospace)

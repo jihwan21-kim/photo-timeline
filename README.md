@@ -80,9 +80,11 @@ Android 14+에서 사용자가 "전체 허용" 대신 "선택한 사진만" 을 
 
 ### Timeline.json 내보내기
 
-앱 상단의 `사진 골라 Timeline.json 만들기`에서 원본 사진을 여러 장 고르면,
+앱 상단의 `사진 직접 골라 만들기`에서 원본 사진을 여러 장 고르면,
 GPS와 촬영시간이 있는 사진만 시간순으로 정렬해 `Timeline.json`으로 저장한다.
 좌표가 없는 사진과 정확히 중복된 지점은 자동으로 제외된다. 사진 자체는 JSON에 포함되지 않는다.
+사진을 일일이 고르지 않고 시작일과 종료일만 정해 기간 전체를 자동으로 내보낼 수도 있다.
+이 방식은 지도용 출처·폴더 필터와 무관하게 기기에서 접근 허용된 사진 전체를 확인한다.
 
 출력은 `semanticSegments[].timelinePath[]` 형식이며
 [`google-timeline-visualizer` v2.4.1](https://github.com/mahlernim/google-timeline-visualizer/releases/tag/v2.4.1)의

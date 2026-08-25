@@ -30,6 +30,7 @@ internal data class PreparedTimelineJson(
     val skippedUnreadable: Int,
     val removedDuplicates: Int,
     val estimatedTimeZones: Int,
+    val skippedOutsideRange: Int,
 )
 
 /**
@@ -47,16 +48,30 @@ internal class TimelineJsonExporter(private val context: Context) {
 
     private data class ResolvedTime(val millis: Long, val estimatedTimeZone: Boolean)
 
-    suspend fun prepare(photoUris: List<Uri>): PreparedTimelineJson = withContext(Dispatchers.IO) {
+    suspend fun prepare(
+        photoUris: List<Uri>,
+        fromInclusive: Long? = null,
+        toExclusive: Long? = null,
+    ): PreparedTimelineJson = withContext(Dispatchers.IO) {
+        require((fromInclusive == null) == (toExclusive == null))
+        if (fromInclusive != null && toExclusive != null) require(fromInclusive < toExclusive)
         val uniqueUris = photoUris.distinct()
         val points = ArrayList<TimelinePoint>(uniqueUris.size)
         var noLocation = 0
         var noTime = 0
         var unreadable = 0
+        var outsideRange = 0
 
         uniqueUris.forEach { uri ->
             when (val result = readPhoto(uri)) {
-                is ReadResult.Point -> points += result.value
+                is ReadResult.Point -> {
+                    val time = result.value.timeMillis
+                    if (!isInTimelineRange(time, fromInclusive, toExclusive)) {
+                        outsideRange += 1
+                    } else {
+                        points += result.value
+                    }
+                }
                 ReadResult.NoLocation -> noLocation += 1
                 ReadResult.NoTime -> noTime += 1
                 ReadResult.Unreadable -> unreadable += 1
@@ -73,6 +88,7 @@ internal class TimelineJsonExporter(private val context: Context) {
             skippedUnreadable = unreadable,
             removedDuplicates = points.size - normalized.size,
             estimatedTimeZones = normalized.count(TimelinePoint::timeZoneEstimated),
+            skippedOutsideRange = outsideRange,
         )
     }
 
@@ -230,6 +246,16 @@ internal class TimelineJsonExporter(private val context: Context) {
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.US),
         )
     }
+}
+
+internal fun isInTimelineRange(
+    timeMillis: Long,
+    fromInclusive: Long?,
+    toExclusive: Long?,
+): Boolean {
+    if (fromInclusive == null && toExclusive == null) return true
+    require(fromInclusive != null && toExclusive != null)
+    return timeMillis >= fromInclusive && timeMillis < toExclusive
 }
 
 internal fun normalizeTimelinePoints(points: List<TimelinePoint>): List<TimelinePoint> {
