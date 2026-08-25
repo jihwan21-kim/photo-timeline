@@ -233,9 +233,9 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
         val from = timelineFromMillis
         val toExclusive = timelineToExclusiveMillis
         startTimelinePreparation(
-            workingStatus = "선택한 기간의 사진을 찾고 GPS를 읽는 중…",
-            emptyStatus = "이 기간에 GPS와 촬영시간이 있는 사진이 없어.",
-            countLabel = "기간 후보",
+            workingStatus = "선택한 기간의 카메라 사진을 찾고 GPS를 읽는 중…",
+            emptyStatus = "이 기간의 카메라 폴더에 GPS와 촬영시간이 있는 사진이 없어.",
+            countLabel = "카메라 후보",
             limitedAccess = limitedAccess,
         ) {
             val uris = scanner.timelineUris(from, toExclusive)

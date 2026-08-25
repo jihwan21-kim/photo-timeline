@@ -179,7 +179,7 @@ fun Screen(vm: RouteViewModel = viewModel()) {
                 Label("GOOGLE TIMELINE VISUALIZER")
                 Text("Timeline.json 만들기", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    "기간을 정하면 아래 출처·폴더 설정과 무관하게, 기기에서 접근 가능한 사진 전체를 훑어. GPS와 촬영시간만 JSON에 들어가.",
+                    "기간을 정하면 DCIM/Camera 카메라 폴더만 훑어. GPS와 촬영시간만 JSON에 들어가고, 아래 지도용 출처·폴더 설정은 적용되지 않아.",
                     color = Graphite,
                     fontSize = 11.5.sp,
                 )
@@ -207,7 +207,7 @@ fun Screen(vm: RouteViewModel = viewModel()) {
                     enabled = !vm.preparingTimeline,
                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
                 ) {
-                    Text(if (vm.preparingTimeline) "위치정보 읽는 중…" else "이 기간 전체로 Timeline.json 만들기")
+                    Text(if (vm.preparingTimeline) "위치정보 읽는 중…" else "이 기간 카메라 사진으로 Timeline.json 만들기")
                 }
                 Text("또는 사진을 직접 고르기", color = Graphite, fontSize = 11.sp)
                 OutlinedButton(

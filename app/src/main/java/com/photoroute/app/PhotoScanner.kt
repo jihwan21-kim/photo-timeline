@@ -63,9 +63,9 @@ class PhotoScanner(private val context: Context) {
     }
 
     /**
-     * Returns MediaStore candidates near a local date window. The two-day margin prevents
-     * large timezone changes around the first/last day from being cut off by the cheap SQL filter;
-     * TimelineJsonExporter applies the exact half-open range after reading each original EXIF.
+     * Returns camera-folder MediaStore candidates near a local date window. The two-day margin
+     * prevents large timezone changes around the first/last day from being cut off by the cheap
+     * SQL filter; TimelineJsonExporter applies the exact half-open range after reading EXIF.
      */
     suspend fun timelineUris(fromInclusive: Long, toExclusive: Long): List<android.net.Uri> =
         withContext(Dispatchers.IO) {
@@ -73,20 +73,32 @@ class PhotoScanner(private val context: Context) {
             val margin = 2L * 24L * 60L * 60L * 1_000L
             val queryFrom = (fromInclusive - margin).coerceAtLeast(0L)
             val queryTo = (toExclusive + margin).coerceAtLeast(toExclusive)
-            val where =
+            val dateWhere =
                 "((${MediaStore.Images.Media.DATE_TAKEN} >= ? AND " +
                     "${MediaStore.Images.Media.DATE_TAKEN} < ?) OR " +
                     "${MediaStore.Images.Media.DATE_TAKEN} IS NULL OR " +
                     "${MediaStore.Images.Media.DATE_TAKEN} <= 0)"
+            @Suppress("DEPRECATION")
+            val cameraWhere = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?"
+            } else {
+                "${MediaStore.Images.Media.DATA} LIKE ?"
+            }
+            val cameraPath = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                "DCIM/Camera/%"
+            } else {
+                "%/DCIM/Camera/%"
+            }
             val args = arrayOf(
                 queryFrom.toString(),
                 queryTo.toString(),
+                cameraPath,
             )
             buildList {
                 context.contentResolver.query(
                     collection,
                     arrayOf(MediaStore.Images.Media._ID),
-                    where,
+                    "$dateWhere AND $cameraWhere",
                     args,
                     "${MediaStore.Images.Media.DATE_TAKEN} ASC",
                 )?.use { cursor ->
