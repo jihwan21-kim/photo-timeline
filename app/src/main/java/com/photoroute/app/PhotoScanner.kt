@@ -76,7 +76,8 @@ class PhotoScanner(private val context: Context) {
             val where =
                 "((${MediaStore.Images.Media.DATE_TAKEN} >= ? AND " +
                     "${MediaStore.Images.Media.DATE_TAKEN} < ?) OR " +
-                    "${MediaStore.Images.Media.DATE_TAKEN} IS NULL)"
+                    "${MediaStore.Images.Media.DATE_TAKEN} IS NULL OR " +
+                    "${MediaStore.Images.Media.DATE_TAKEN} <= 0)"
             val args = arrayOf(
                 queryFrom.toString(),
                 queryTo.toString(),
