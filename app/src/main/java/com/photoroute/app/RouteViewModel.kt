@@ -119,8 +119,11 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
     fun setRange(from: Long, to: Long) { fromMillis = from; toMillis = to }
     fun setTimelineRange(fromInclusive: Long, toExclusive: Long) {
         require(fromInclusive < toExclusive)
+        if (timelineFromMillis == fromInclusive && timelineToExclusiveMillis == toExclusive) return
         timelineFromMillis = fromInclusive
         timelineToExclusiveMillis = toExclusive
+        clearPreparedTimeline()
+        timelineStatus = ""
     }
     fun toggleBucket(id: Long) {
         selectedBuckets = if (id in selectedBuckets) selectedBuckets - id else selectedBuckets + id
