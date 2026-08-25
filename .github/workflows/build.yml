@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/camera-folder-range-export]
     tags: ['v*']
   workflow_dispatch:
 
